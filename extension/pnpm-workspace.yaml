@@ -1,0 +1,13 @@
+# pnpm project settings (pnpm 11 reads settings from here, NOT from a
+# "pnpm" field in package.json).
+#
+# esbuild (a transitive dep of vite) ships a postinstall that links its
+# platform-specific binary. pnpm ignores dependency build scripts by default
+# (supply-chain hardening); approving esbuild here lets that postinstall run so
+# `vite build` works, and makes `pnpm install` exit 0 (otherwise pnpm errors
+# with ERR_PNPM_IGNORED_BUILDS in non-interactive/CI runs).
+#
+# NOTE: in pnpm v11 the old `onlyBuiltDependencies` list was REMOVED and
+# replaced by `allowBuilds` (a name -> boolean map).
+allowBuilds:
+  esbuild: true
