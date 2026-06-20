@@ -15,7 +15,7 @@ export type CardSignals = {
   reviewCount: number | null;
   /** Currency-agnostic numeric price, or null when not present. */
   price: number | null;
-  /** Whether the card is a sponsored / "Patrocinado" listing. */
+  /** Whether the card is a sponsored / "Promocionado" listing. */
   sponsored: boolean;
 };
 
