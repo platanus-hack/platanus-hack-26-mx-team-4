@@ -15,7 +15,7 @@ import type { ProxyRequest, ProxyResponse, SummaryError } from './types';
 import { parseProxyResponse } from './parseProxyResponse';
 
 /** Deployed Vercel proxy host (matches manifest host_permissions). */
-export const PROXY_BASE = 'https://ml-review-summary-proxy.vercel.app';
+export const PROXY_BASE = 'https://hackaton-two-delta.vercel.app';
 const ENDPOINT = `${PROXY_BASE}/api/summarize`;
 
 /** Outcome: either a valid summary or a typed error (never throws). */

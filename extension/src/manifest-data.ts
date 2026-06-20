@@ -35,7 +35,7 @@ export const manifestData: ManifestData = {
   // Pilar 2: the ONLY new permission. Exact proxy host, no wildcards beyond the
   // path. If the Vercel hostname changes, update this AND PROXY_BASE in
   // src/detail/proxyClient.ts together (the manifest audit test enforces this).
-  host_permissions: ['https://ml-review-summary-proxy.vercel.app/*'],
+  host_permissions: ['https://hackaton-two-delta.vercel.app/*'],
   content_scripts: [
     {
       // Chrome does NOT support TLD wildcards, so the major ML country TLDs are

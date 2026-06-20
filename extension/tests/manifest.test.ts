@@ -16,7 +16,7 @@ const extra = m as unknown as Record<string, unknown>;
 
 describe('manifest — minimal permission delta (Pilar 2)', () => {
   it('adds exactly one host_permission: the Vercel proxy domain', () => {
-    expect(m.host_permissions).toEqual(['https://ml-review-summary-proxy.vercel.app/*']);
+    expect(m.host_permissions).toEqual(['https://hackaton-two-delta.vercel.app/*']);
   });
 
   it('the host_permission matches PROXY_BASE used by the proxy client', () => {
@@ -25,7 +25,7 @@ describe('manifest — minimal permission delta (Pilar 2)', () => {
 
   it('uses NO broad TLD wildcard in host_permissions (exact host only)', () => {
     for (const h of m.host_permissions ?? []) {
-      expect(h.startsWith('https://ml-review-summary-proxy.vercel.app/')).toBe(true);
+      expect(h.startsWith('https://hackaton-two-delta.vercel.app/')).toBe(true);
     }
   });
 
