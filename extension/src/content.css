@@ -216,3 +216,162 @@
 .ml-summary-card__verdict p {
   margin: 0;
 }
+
+/* ===========================================================================
+   ML Re-rank preferences panel (Pilar 1, Phase 5). A small collapsed square
+   fixed bottom-right, ABOVE the toggle pill (.ml-rerank-toggle sits at
+   bottom:16px; this sits at bottom:64px so the two coexist without overlap).
+   Clicking the square expands a panel with the 4 Spanish preset chips + w1/w2/
+   w4 sliders. Expand/collapse animates via the [data-ml-prefs-open] attribute
+   (opacity + max-height + transform transitions) — no JS height measurement.
+   =========================================================================== */
+.ml-rerank-prefs {
+  position: fixed;
+  right: 16px;
+  bottom: 64px;
+  z-index: 2147483647;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: #2b2b2b;
+  color: #fff;
+  font: 700 20px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.ml-rerank-prefs:hover {
+  background: #3a3a3a;
+}
+
+.ml-rerank-prefs[aria-expanded='true'] {
+  background: #1b873f;
+}
+
+.ml-rerank-prefs[aria-expanded='true']:hover {
+  background: #1f7a39;
+}
+
+/* The expanded panel is a sibling of the square (interactive controls cannot
+   live inside a <button>). It is always in the DOM; the open attribute drives
+   a max-height + opacity + transform transition so expand/collapse animates. */
+.ml-rerank-prefs__panel {
+  position: fixed;
+  right: 16px;
+  bottom: 112px; /* 64px (square) + 40px (square height) + 8px gap */
+  z-index: 2147483647;
+  width: 248px;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(8px);
+  padding: 0 14px;
+  border-radius: 12px;
+  background: #fff;
+  color: #2b2b2b;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  transition: max-height 0.18s ease, opacity 0.18s ease, transform 0.18s ease, padding 0.18s ease;
+}
+
+.ml-rerank-prefs__panel[data-ml-prefs-open='true'] {
+  max-height: 420px;
+  opacity: 1;
+  transform: translateY(0);
+  padding: 12px 14px;
+}
+
+.ml-rerank-prefs__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ml-rerank-prefs__title {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.ml-rerank-prefs__close {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: #f0f0f0;
+  color: #2b2b2b;
+  font: 700 16px/1 inherit;
+  cursor: pointer;
+}
+
+.ml-rerank-prefs__close:hover {
+  background: #e3e3e3;
+}
+
+.ml-rerank-prefs__group-label {
+  display: block;
+  font-weight: 600;
+  font-size: 12px;
+  color: #777;
+  margin-bottom: 6px;
+}
+
+.ml-rerank-prefs__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.ml-rerank-prefs__chip {
+  padding: 5px 10px;
+  border: 1px solid #d8d8d8;
+  border-radius: 999px;
+  background: #fff;
+  color: #2b2b2b;
+  font: 600 12px/1 inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.ml-rerank-prefs__chip:hover {
+  background: #f0f0f0;
+  border-color: #bdbdbd;
+}
+
+.ml-rerank-prefs__sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ml-rerank-prefs__slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ml-rerank-prefs__slider-caption {
+  flex: 0 0 24px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #555;
+}
+
+.ml-rerank-prefs__slider {
+  flex: 1 1 auto;
+  cursor: pointer;
+}

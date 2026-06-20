@@ -13,6 +13,8 @@
 import { findContainer } from './adapter/mercadolibre';
 import { createReorderer } from './observe';
 import { mountToggle } from './ui/toggle';
+import { mountPrefsPanel } from './ui/prefsPanel';
+import { loadPrefs } from './prefs/rankingPrefs';
 import { runDetailSummary } from './detail';
 
 /**
@@ -57,8 +59,22 @@ export function main(): void {
   if (isListingRoute()) {
     const container = findContainer(document);
     if (!container) return;
-    const reorderer = createReorderer(container);
+    // Load persisted prefs FIRST so the initial render uses the user's saved
+    // weights (spec: "the stored config is used for the first rank"). loadPrefs
+    // falls back to defaults on any storage failure (opaque origin / privacy
+    // mode), so a fresh or privacy-restricted page still re-ranks with the
+    // defaults — it never throws.
+    const config = loadPrefs();
+    const reorderer = createReorderer(container, config);
     mountToggle(container, reorderer);
+    // The prefs panel persists changes itself (savePrefs) and notifies via
+    // onConfigChange, which re-ranks the CURRENT DOM through updateConfig with
+    // ZERO network calls (Pilar 1). It coexists with the toggle pill, mounted
+    // just above it (content.css: bottom 64px vs the pill's 16px).
+    mountPrefsPanel({
+      initialConfig: config,
+      onConfigChange: (next) => reorderer.updateConfig(next),
+    });
     return;
   }
   if (isDetailPageRoute()) {

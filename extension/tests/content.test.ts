@@ -14,10 +14,30 @@ vi.mock('../src/adapter/mercadolibre', () => ({
   findContainer: vi.fn(() => null),
 }));
 vi.mock('../src/observe', () => ({
-  createReorderer: vi.fn(() => ({ reorder() {}, start() {}, stop() {}, destroy() {} })),
+  createReorderer: vi.fn(() => ({
+    reorder() {},
+    start() {},
+    stop() {},
+    destroy() {},
+    updateConfig: vi.fn(),
+  })),
 }));
 vi.mock('../src/ui/toggle', () => ({
   mountToggle: vi.fn(() => ({ on() {}, off() {}, destroy() {}, isOn: () => false })),
+}));
+vi.mock('../src/ui/prefsPanel', () => ({
+  mountPrefsPanel: vi.fn(() => ({
+    expand() {},
+    collapse() {},
+    destroy() {},
+    isExpanded: () => false,
+  })),
+}));
+vi.mock('../src/prefs/rankingPrefs', () => ({
+  // Default config returned by the loadPrefs mock; tests override via
+  // mockReturnValue to assert the wiring uses the LOADED config, not defaults.
+  loadPrefs: vi.fn(() => ({ w1: 0.6, w2: 0.3, w3: 0.4, w4: 0.3, priorC: 5 })),
+  savePrefs: vi.fn(),
 }));
 vi.mock('../src/detail', () => ({
   runDetailSummary: vi.fn(() => ({ destroy: vi.fn() })),
@@ -25,11 +45,18 @@ vi.mock('../src/detail', () => ({
 
 import { main, isDetailPageRoute, isListingRoute } from '../src/content';
 import { findContainer } from '../src/adapter/mercadolibre';
+import { createReorderer } from '../src/observe';
 import { mountToggle } from '../src/ui/toggle';
+import { mountPrefsPanel } from '../src/ui/prefsPanel';
+import { loadPrefs } from '../src/prefs/rankingPrefs';
 import { runDetailSummary } from '../src/detail';
+import type { RankConfig } from '../src/ranking/types';
 
 const findContainerMock = findContainer as unknown as ReturnType<typeof vi.fn>;
+const createReordererMock = createReorderer as unknown as ReturnType<typeof vi.fn>;
 const mountToggleMock = mountToggle as unknown as ReturnType<typeof vi.fn>;
+const mountPrefsPanelMock = mountPrefsPanel as unknown as ReturnType<typeof vi.fn>;
+const loadPrefsMock = loadPrefs as unknown as ReturnType<typeof vi.fn>;
 const runDetailSummaryMock = runDetailSummary as unknown as ReturnType<typeof vi.fn>;
 
 describe('isDetailPageRoute — PDP detection', () => {
@@ -107,6 +134,54 @@ describe('main() — routing dispatch', () => {
     expect(runDetailSummaryMock).not.toHaveBeenCalled();
   });
 
+  it('listing route wires loadPrefs -> createReorderer(container, config) -> mountToggle -> mountPrefsPanel (Phase 5.5)', () => {
+    const loadedConfig: RankConfig = { w1: 0.9, w2: 0.2, w3: 0.4, w4: 0.5, priorC: 5 };
+    loadPrefsMock.mockReturnValue(loadedConfig);
+    const containerEl = document.createElement('ol');
+    vi.stubGlobal('location', { href: 'https://listado.mercadolibre.com.mx/audifonos' });
+    findContainerMock.mockReturnValue(containerEl);
+
+    main();
+
+    // loadPrefs runs FIRST so the initial render uses the persisted weights.
+    expect(loadPrefsMock).toHaveBeenCalledTimes(1);
+    // The reorderer is created with the LOADED config (not bare defaults).
+    expect(createReordererMock).toHaveBeenCalledTimes(1);
+    expect(createReordererMock).toHaveBeenCalledWith(containerEl, loadedConfig);
+    // Toggle + panel are both mounted on a listing route (coexist).
+    expect(mountToggleMock).toHaveBeenCalledWith(containerEl, createReordererMock.mock.results[0].value);
+    expect(mountPrefsPanelMock).toHaveBeenCalledTimes(1);
+    // The panel receives the loaded config as its initial slider state.
+    const opts = mountPrefsPanelMock.mock.calls[0][0] as {
+      initialConfig: RankConfig;
+      onConfigChange: (c: RankConfig) => void;
+    };
+    expect(opts.initialConfig).toEqual(loadedConfig);
+    expect(typeof opts.onConfigChange).toBe('function');
+  });
+
+  it('listing route wires onConfigChange -> reorderer.updateConfig (panel change re-ranks, zero network)', () => {
+    loadPrefsMock.mockReturnValue({ w1: 0.6, w2: 0.3, w3: 0.4, w4: 0.3, priorC: 5 });
+    vi.stubGlobal('location', { href: 'https://listado.mercadolibre.com.mx/audifonos' });
+    findContainerMock.mockReturnValue(document.createElement('ol'));
+
+    main();
+
+    const reorderer = createReordererMock.mock.results[0].value as {
+      updateConfig: ReturnType<typeof vi.fn>;
+    };
+    const opts = mountPrefsPanelMock.mock.calls[0][0] as {
+      onConfigChange: (c: RankConfig) => void;
+    };
+    expect(reorderer.updateConfig).not.toHaveBeenCalled();
+
+    const next: RankConfig = { w1: 1.0, w2: 0.1, w3: 0.4, w4: 0.1, priorC: 5 };
+    opts.onConfigChange(next);
+
+    expect(reorderer.updateConfig).toHaveBeenCalledTimes(1);
+    expect(reorderer.updateConfig).toHaveBeenCalledWith(next);
+  });
+
   it('routes a PDP to the Pilar 2 summary pipeline, NOT the listing branch', () => {
     vi.stubGlobal('location', { href: 'https://articulo.mercadolibre.com.mx/MLM123-x' });
 
@@ -115,6 +190,8 @@ describe('main() — routing dispatch', () => {
     expect(runDetailSummaryMock).toHaveBeenCalledTimes(1);
     expect(findContainerMock).not.toHaveBeenCalled();
     expect(mountToggleMock).not.toHaveBeenCalled();
+    expect(mountPrefsPanelMock).not.toHaveBeenCalled();
+    expect(loadPrefsMock).not.toHaveBeenCalled();
   });
 
   it('routes a /p/ short URL to the Pilar 2 summary pipeline', () => {
@@ -137,14 +214,17 @@ describe('main() — routing dispatch', () => {
     main();
     expect(findContainerMock).not.toHaveBeenCalled();
     expect(runDetailSummaryMock).not.toHaveBeenCalled();
+    expect(mountPrefsPanelMock).not.toHaveBeenCalled();
+    expect(loadPrefsMock).not.toHaveBeenCalled();
   });
 
-  it('listing with no results container does not mount the toggle', () => {
+  it('listing with no results container does not mount the toggle or the panel', () => {
     vi.stubGlobal('location', { href: 'https://listado.mercadolibre.com.mx/x' });
     findContainerMock.mockReturnValue(null);
     main();
     expect(findContainerMock).toHaveBeenCalled();
     expect(mountToggleMock).not.toHaveBeenCalled();
+    expect(mountPrefsPanelMock).not.toHaveBeenCalled();
   });
 });
 
