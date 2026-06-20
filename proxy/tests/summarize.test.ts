@@ -145,17 +145,33 @@ describe('parseGeminiResponse', () => {
 describe('summarizeWithGemini (mocked fetch)', () => {
   it('returns the summary on a valid Gemini response', async () => {
     const f = mockFetch(() => jsonRes(geminiBody(VALID_SUMMARY)));
-    expect(await summarizeWithGemini(REQUEST as never, API_KEY, f)).toEqual(VALID_SUMMARY);
+    expect(await summarizeWithGemini(REQUEST as never, API_KEY, f)).toEqual({ ok: true, data: VALID_SUMMARY });
   });
-  it('returns null on a non-ok Gemini response', async () => {
-    const f = mockFetch(() => jsonRes({ error: 'rate limited' }, { status: 429 }));
-    expect(await summarizeWithGemini(REQUEST as never, API_KEY, f)).toBeNull();
+  it('reports http_error + the upstream status on a non-ok Gemini response', async () => {
+    const f = mockFetch(() => jsonRes({ error: 'forbidden' }, { status: 403 }));
+    expect(await summarizeWithGemini(REQUEST as never, API_KEY, f)).toEqual({
+      ok: false,
+      reason: 'http_error',
+      upstreamStatus: 403,
+    });
   });
-  it('returns null when fetch rejects', async () => {
+  it('reports fetch_failed with a null status when fetch rejects', async () => {
     const f = mockFetch(() => {
       throw new TypeError('network');
     });
-    expect(await summarizeWithGemini(REQUEST as never, API_KEY, f)).toBeNull();
+    expect(await summarizeWithGemini(REQUEST as never, API_KEY, f)).toEqual({
+      ok: false,
+      reason: 'fetch_failed',
+      upstreamStatus: null,
+    });
+  });
+  it('reports malformed_candidates (with the 200 status) on a safety-blocked body', async () => {
+    const f = mockFetch(() => jsonRes(geminiBody({}, { blocked: true })));
+    expect(await summarizeWithGemini(REQUEST as never, API_KEY, f)).toEqual({
+      ok: false,
+      reason: 'malformed_candidates',
+      upstreamStatus: 200,
+    });
   });
 });
 
@@ -188,6 +204,23 @@ describe('handleRequest — HTTP status mapping', () => {
     const r = await handleRequest(REQUEST, API_KEY, f);
     expect(r.status).toBe(502);
     expect((r.body as { error: string }).error).toBe('malformed_model_response');
+  });
+
+  it('502 surfaces the upstream Gemini status + reason for diagnosis (e.g. bad key)', async () => {
+    const f = mockFetch(() => jsonRes({ error: { message: 'API key not valid' } }, { status: 403 }));
+    const r = await handleRequest(REQUEST, API_KEY, f);
+    expect(r.status).toBe(502);
+    expect(r.body).toEqual({
+      error: 'malformed_model_response',
+      reason: 'http_error',
+      gemini_status: 403,
+    });
+  });
+
+  it('502 body never leaks the API key', async () => {
+    const f = mockFetch(() => jsonRes({ error: 'forbidden' }, { status: 403 }));
+    const r = await handleRequest(REQUEST, API_KEY, f);
+    expect(JSON.stringify(r.body)).not.toContain(API_KEY);
   });
 });
 

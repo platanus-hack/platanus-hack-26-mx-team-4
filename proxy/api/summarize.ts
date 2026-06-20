@@ -142,30 +142,51 @@ export function parseGeminiResponse(json: unknown): ProxyResponse | null {
 }
 
 /**
- * Call Gemini and return a valid ProxyResponse, or null when the model response
- * is malformed/empty (the handler maps null -> 502). Accepts a fetchImpl so
- * tests mock the network without hitting Gemini.
+ * Why a Gemini call did not yield a usable summary. Surfaced (with the upstream
+ * HTTP status) in the 502 body so production failures are diagnosable WITHOUT
+ * leaking the API key or Gemini's raw response body:
+ *   fetch_failed         -> the request never reached Gemini (network/DNS)
+ *   http_error           -> Gemini returned non-2xx (e.g. 403 bad key, 404 model,
+ *                           429 quota) — `upstreamStatus` carries the real code
+ *   invalid_json         -> Gemini's 2xx body was not JSON
+ *   malformed_candidates -> JSON parsed but had no valid summary (incl. safety
+ *                           block / empty candidates)
+ */
+export type GeminiFailureReason = 'fetch_failed' | 'http_error' | 'invalid_json' | 'malformed_candidates';
+
+/** Discriminated outcome of a Gemini call: a summary, or a diagnosable failure. */
+export type GeminiOutcome =
+  | { ok: true; data: ProxyResponse }
+  | { ok: false; reason: GeminiFailureReason; upstreamStatus: number | null };
+
+/**
+ * Call Gemini and return either a valid ProxyResponse or a typed failure that
+ * carries the upstream HTTP status (the handler maps any failure -> 502 and
+ * echoes the status/reason for diagnosis). Accepts a fetchImpl so tests mock the
+ * network without hitting Gemini. The API key never appears in the outcome.
  */
 export async function summarizeWithGemini(
   request: ProxyRequest,
   apiKey: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<ProxyResponse | null> {
+): Promise<GeminiOutcome> {
   const { url, headers, body } = buildGeminiRequest(request, apiKey);
   let res: Response;
   try {
     res = await fetchImpl(url, { method: 'POST', headers, body });
   } catch {
-    return null;
+    return { ok: false, reason: 'fetch_failed', upstreamStatus: null };
   }
-  if (!res.ok) return null;
+  if (!res.ok) return { ok: false, reason: 'http_error', upstreamStatus: res.status };
   let json: unknown;
   try {
     json = await res.json();
   } catch {
-    return null;
+    return { ok: false, reason: 'invalid_json', upstreamStatus: res.status };
   }
-  return parseGeminiResponse(json);
+  const parsed = parseGeminiResponse(json);
+  if (!parsed) return { ok: false, reason: 'malformed_candidates', upstreamStatus: res.status };
+  return { ok: true, data: parsed };
 }
 
 /**
@@ -184,10 +205,19 @@ export async function handleRequest(
     return { status: 500, body: { error: 'missing_api_key' } };
   }
   const result = await summarizeWithGemini(request, apiKey, fetchImpl);
-  if (!result) {
-    return { status: 502, body: { error: 'malformed_model_response' } };
+  if (!result.ok) {
+    // 502 keeps the stable `error` code; `reason` + `gemini_status` are added
+    // for diagnosis only (safe: a status code, never the key or Gemini's body).
+    return {
+      status: 502,
+      body: {
+        error: 'malformed_model_response',
+        reason: result.reason,
+        gemini_status: result.upstreamStatus,
+      },
+    };
   }
-  return { status: 200, body: result };
+  return { status: 200, body: result.data };
 }
 
 /** Apply the CORS headers required by the extension (per the locked contract). */
