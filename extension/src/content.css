@@ -49,3 +49,128 @@
   background: #8ef0a8;
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
 }
+
+/* ===========================================================================
+   ML Review Summary card (Pilar 2). States are stamped on the card root via
+   [data-ml-summary]: loading | empty | error | result. The card floats over
+   the PDP (fixed) so it is visible regardless of ML's layout shifts.
+   =========================================================================== */
+.ml-summary-card {
+  position: fixed;
+  right: 16px;
+  top: 16px;
+  z-index: 2147483646;
+  width: 320px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #fff;
+  color: #2b2b2b;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+.ml-summary-card__title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
+/* Loading skeleton + shimmer. */
+.ml-summary-card__skeleton {
+  height: 14px;
+  margin: 8px 0;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #ececec 25%, #f5f5f5 50%, #ececec 75%);
+  background-size: 200% 100%;
+  animation: ml-summary-shimmer 1.3s infinite linear;
+}
+
+@keyframes ml-summary-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Empty state. */
+.ml-summary-card__empty {
+  margin: 0;
+  color: #555;
+}
+
+.ml-summary-card__hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #777;
+}
+
+/* Error state + retry button. */
+.ml-summary-card__error {
+  margin: 0 0 10px;
+  color: #b00020;
+}
+
+.ml-summary-card__retry {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #2b2b2b;
+  color: #fff;
+  font: 600 13px/1 inherit;
+  cursor: pointer;
+}
+
+.ml-summary-card__retry:disabled {
+  background: #9aa0a6;
+  cursor: not-allowed;
+}
+
+/* Result sections. */
+.ml-summary-card__section {
+  margin-bottom: 12px;
+}
+
+.ml-summary-card__section-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.ml-summary-card__section ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.ml-summary-card__section li {
+  margin: 2px 0;
+}
+
+.ml-summary-card__strong {
+  color: #1b873f;
+}
+
+.ml-summary-card__weak {
+  color: #b00020;
+}
+
+.ml-summary-card__section-empty {
+  margin: 0;
+  color: #999;
+}
+
+.ml-summary-card__verdict {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #ececec;
+}
+
+.ml-summary-card__verdict-label {
+  display: block;
+  font-weight: 600;
+  font-size: 12px;
+  color: #777;
+  margin-bottom: 2px;
+}
+
+.ml-summary-card__verdict p {
+  margin: 0;
+}
