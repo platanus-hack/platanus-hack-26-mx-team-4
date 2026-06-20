@@ -238,11 +238,21 @@ function extractReviewsFromDom(doc: Document): ReviewText[] {
   const root: ParentNode = container ?? doc;
   const items = safeQueryAll(root, REVIEW_ITEM_SELECTOR);
   if (items.length === 0) return [];
-  return items.map((item) => ({
-    rating: parseRatingFromEl(item),
-    text: textOf(safeQuery<HTMLElement>(item, REVIEW_TEXT_SELECTOR)),
-    ...(pickDate(item) ? { date: pickDate(item)! } : {}),
-  }));
+  const reviews = items.map((item) => {
+    // Compute pickDate once per review (was called twice: condition + value).
+    const date = pickDate(item);
+    return {
+      rating: parseRatingFromEl(item),
+      text: textOf(safeQuery<HTMLElement>(item, REVIEW_TEXT_SELECTOR)),
+      ...(date ? { date } : {}),
+    };
+  });
+  // Filter out empty-text entries (rating-only reviews or a content-selector
+  // miss). The hydration path (`asReview`) already requires non-empty text; keep
+  // the DOM path consistent so the pipeline shows the empty state instead of
+  // POSTing blank "1. " lines to the proxy (wasted Gemini call + poor summary).
+  // If every matched item has empty text, return zero reviews.
+  return reviews.filter((r) => r.text.trim().length > 0);
 }
 
 function parseRatingFromEl(item: Element): number | null {

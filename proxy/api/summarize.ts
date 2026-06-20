@@ -38,6 +38,24 @@ const RESPONSE_SCHEMA = {
   required: ['strongPoints', 'weakPoints', 'verdict'],
 } as const;
 
+/**
+ * Defensive caps to bound proxy cost + memory (Pilar 2 quota safety). The team
+ * is quota-constrained on Gemini, so anything that wastes a call is high-
+ * impact: reject empty/oversize payloads BEFORE they reach the model.
+ */
+const MAX_REVIEWS = 100;
+const MAX_REVIEW_CHARS = 4000;
+/**
+ * Maximum accepted raw body size. COHERENT with the per-field caps: a legit
+ * payload at the cap (MAX_REVIEWS * MAX_REVIEW_CHARS ~ 400KB of review text,
+ * plus JSON overhead + product context) fits comfortably under 512KB. The
+ * body cap guards readBody from unbounded streams (DoS / memory); the
+ * per-field caps (enforced POST-parse, by count rejection + text truncation)
+ * bound what actually reaches Gemini. The previous 256KB cap rejected a
+ * within-caps payload as body_too_large before it could be parsed.
+ */
+const MAX_BODY_BYTES = 512 * 1024;
+
 /** JSON HTTP response helper body. */
 type HttpResult = { status: number; body: unknown };
 
@@ -87,18 +105,49 @@ export function buildPrompt(request: ProxyRequest): string {
   ].join('\n');
 }
 
-/** Structural guard for an incoming ProxyRequest. */
+/**
+ * Structural guard for an incoming ProxyRequest. Defensive caps bound the
+ * proxy cost; the empty-reviews / empty-text cases are rejected because
+ * `.every` on an empty array is true (a direct caller could otherwise trigger
+ * a real Gemini call with an empty prompt and waste a quota unit).
+ *
+ * The COUNT cap (MAX_REVIEWS) is enforced here (reject). The per-review TEXT
+ * LENGTH cap (MAX_REVIEW_CHARS) is NOT enforced here: a single over-long
+ * review is TRUNCATED post-validation (see truncateReviews) rather than
+ * failing the whole summary. Empty/whitespace text is still rejected.
+ */
 export function isProxyRequest(value: unknown): value is ProxyRequest {
   if (typeof value !== 'object' || value === null) return false;
   const r = value as Record<string, unknown>;
   if (typeof r.productId !== 'string' || !r.productId) return false;
   if (typeof r.productTitle !== 'string') return false;
   if (!Array.isArray(r.reviews)) return false;
+  if (r.reviews.length === 0) return false; // require at least one review
+  if (r.reviews.length > MAX_REVIEWS) return false; // defensive count cap
   return r.reviews.every((rv) => {
     if (!rv || typeof rv !== 'object') return false;
     const v = rv as Record<string, unknown>;
-    return typeof v.text === 'string' && (v.rating === null || typeof v.rating === 'number');
+    if (typeof v.text !== 'string') return false;
+    if (v.text.trim().length === 0) return false; // reject empty body text
+    // NOTE: over-long text is NOT rejected here — truncated post-validation.
+    return v.rating === null || typeof v.rating === 'number';
   });
+}
+
+/**
+ * Cap each review's text to MAX_REVIEW_CHARS (defensive, post-validation). A
+ * single over-long review is TRUNCATED rather than failing the whole summary
+ * (the count cap + empty-text checks still reject in isProxyRequest). Returns
+ * a shallow-copied request with truncated review texts so the original is not
+ * mutated.
+ */
+export function truncateReviews(request: ProxyRequest): ProxyRequest {
+  return {
+    ...request,
+    reviews: request.reviews.map((r) =>
+      r.text.length > MAX_REVIEW_CHARS ? { ...r, text: r.text.slice(0, MAX_REVIEW_CHARS) } : r,
+    ),
+  };
 }
 
 /** Structural guard for a ProxyResponse (three string arrays + non-empty verdict). */
@@ -204,7 +253,10 @@ export async function handleRequest(
   if (!apiKey) {
     return { status: 500, body: { error: 'missing_api_key' } };
   }
-  const result = await summarizeWithGemini(request, apiKey, fetchImpl);
+  // Truncate over-long review texts post-validation (a single long review
+  // never fails the whole summary; the count cap + empty-text already rejected).
+  const normalized = truncateReviews(request);
+  const result = await summarizeWithGemini(normalized, apiKey, fetchImpl);
   if (!result.ok) {
     // A Gemini 429 (rate limit / quota) is propagated AS 429 so the extension
     // can render its polished "límite de uso" state instead of a raw 5xx. Every
@@ -225,23 +277,119 @@ export async function handleRequest(
   return { status: 200, body: result.data };
 }
 
-/** Apply the CORS headers required by the extension (per the locked contract). */
-export function applyCors(res: ServerResponse): void {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+/**
+ * Apply the CORS headers required by the extension (per the locked contract),
+ * with a FIXED ORIGIN ALLOW-LIST so the paid Gemini key is not drainable by any
+ * website. The legitimate caller is a content script on MercadoLibre pages,
+ * whose `Origin` header is one of the real ML/MercadoLivre hosts below (or a
+ * subdomain thereof — matches the manifest `matches` list).
+ *
+ * Reflection rules:
+ *   - Origin matches an allowed ML host -> reflect that exact origin.
+ *   - Origin header absent                  -> curl / server-to-server: keep the
+ *                                              wildcard so tooling is not broken.
+ *   - Origin present but NOT an allowed host -> omit Access-Control-Allow-Origin
+ *      AND the handler returns 403 (forbidden_origin) before Gemini (see
+ *      handler) so a browser cannot drain quota with foreign-origin POSTs.
+ *
+ * `Vary: Origin` is set UNCONDITIONALLY (every branch) so shared / CDN caches
+ * can never replay a wildcard or reflected response to a foreign-origin caller.
+ */
+export function applyCors(res: ServerResponse, origin: string | undefined): void {
+  // Unconditional: caches must vary on Origin regardless of the branch taken,
+  // otherwise a wildcard response can be replayed to a foreign-origin browser.
+  res.setHeader('Vary', 'Origin');
+  if (origin) {
+    if (isMercadoLibreOrigin(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    // Foreign origin: omit Access-Control-Allow-Origin; the handler also 403s.
+  } else {
+    // No Origin header (curl / server-to-server): keep the permissive wildcard
+    // so non-browser tooling keeps working. Browser cross-origin requests
+    // always send Origin, so this does not open the proxy to browser abuse.
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-/** Collect the raw request body from a Node stream. Coerces string/Uint8Array
- *  chunks to Buffer (a real IncomingMessage emits Buffers; be defensive). */
-export function readBody(req: IncomingMessage): Promise<string> {
+/**
+ * Fixed allow-list of real MercadoLibre / MercadoLivre hosts. The host must be
+ * EXACTLY one of these, or a subdomain thereof (e.g. `www.`, `articulo.`,
+ * `listado.`). Mirrors the manifest `matches` list
+ * (extension/src/manifest-data.ts) PLUS `mercadolivre.com.br` (Brazil uses the
+ * "mercadoliVRE" spelling). A regex / any-TLD match is deliberately NOT used so
+ * look-alike TLDs (`mercadolibre.xyz`) are not reflected.
+ */
+const ML_ALLOWED_HOSTS: ReadonlyArray<string> = [
+  'mercadolibre.com.ar',
+  'mercadolibre.com.mx',
+  'mercadolibre.com.br',
+  'mercadolibre.com',
+  'mercadolibre.cl',
+  'mercadolibre.com.co',
+  'mercadolibre.com.uy',
+  'mercadolibre.com.pe',
+  'mercadolibre.com.ve',
+  'mercadolibre.com.ec',
+  'mercadolibre.com.bo',
+  'mercadolibre.com.py',
+  'mercadolibre.com.do',
+  'mercadolibre.com.cr',
+  'mercadolibre.com.gt',
+  'mercadolibre.co',
+  'mercadolivre.com.br', // Brazil: "mercadoliVRE"
+];
+
+/**
+ * True when `origin` is a MercadoLibre / MercadoLivre origin: the host is
+ * exactly one of `ML_ALLOWED_HOSTS` or a subdomain of one (`.host` suffix). The
+ * leading dot in the suffix check prevents prefix attacks (`evilmercadolibre.com`
+ * does not match `.mercadolibre.com`). Used for CORS reflection AND the 403
+ * forbidden-origin guard in the handler.
+ */
+export function isMercadoLibreOrigin(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname.toLowerCase();
+    return ML_ALLOWED_HOSTS.some((allowed) => host === allowed || host.endsWith('.' + allowed));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Collect the raw request body from a Node stream. Coerces string/Uint8Array
+ * chunks to Buffer (a real IncomingMessage emits Buffers; be defensive). Enforces
+ * a max body size (MAX_BODY_BYTES, 512KB): if the stream exceeds it, the promise
+ * rejects with `body_too_large` and the stream is destroyed so further chunks do
+ * not buffer — the handler maps this to a 413 BEFORE parsing or calling Gemini.
+ */
+export function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
+    let total = 0;
+    let rejected = false;
     req.on('data', (c: Buffer | string | Uint8Array) => {
-      chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c as Uint8Array | string));
+      if (rejected) return;
+      const buf = Buffer.isBuffer(c) ? c : Buffer.from(c as Uint8Array | string);
+      total += buf.length;
+      if (total > maxBytes) {
+        rejected = true;
+        reject(new Error('body_too_large'));
+        // Stop reading: destroy the stream if available so further chunks don't buffer.
+        const destroyable = req as unknown as { destroy?: () => void };
+        if (typeof destroyable.destroy === 'function') destroyable.destroy();
+        return;
+      }
+      chunks.push(buf);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (!rejected) resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', (err: unknown) => {
+      if (!rejected) reject(err);
+    });
   });
 }
 
@@ -253,15 +401,29 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 /**
  * Vercel Node serverless handler. Typed with Node http types (no @vercel/node
- * dep needed). Handles CORS preflight, validates the request, calls Gemini, and
- * returns the structured summary or a typed error.
+ * dep needed). Handles CORS preflight, the origin allow-list guard, validates
+ * the request, calls Gemini, and returns the structured summary or a typed error.
  */
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  applyCors(res);
+  // CORS reflection is based on the request Origin (fixed allow-list). An
+  // absent Origin (curl / server-to-server) is allowed with the wildcard so
+  // tooling keeps working; a PRESENT but not-allowed Origin is rejected with
+  // 403 below BEFORE the body is read or Gemini is called (browser quota-drain
+  // closure — a foreign website cannot POST to the proxy and burn quota).
+  const origin = getRequestOrigin(req);
+  applyCors(res, origin);
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  // Server-side origin guard: a browser request whose Origin is present but NOT
+  // an allowed MercadoLibre origin is forbidden BEFORE readBody / Gemini. An
+  // absent Origin (curl / server-to-server) is still allowed.
+  if (origin && !isMercadoLibreOrigin(origin)) {
+    sendJson(res, 403, { error: 'forbidden_origin' });
     return;
   }
 
@@ -273,8 +435,14 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   let raw: string;
   try {
     raw = await readBody(req);
-  } catch {
-    sendJson(res, 400, { error: 'invalid_body' });
+  } catch (e) {
+    // readBody rejects with `body_too_large` when the stream exceeds the cap;
+    // map that to 413 so the client can distinguish it from a malformed body.
+    if (e instanceof Error && e.message === 'body_too_large') {
+      sendJson(res, 413, { error: 'body_too_large' });
+    } else {
+      sendJson(res, 400, { error: 'invalid_body' });
+    }
     return;
   }
 
@@ -288,4 +456,14 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
   const result = await handleRequest(request, process.env.GEMINI_API_KEY, fetch);
   sendJson(res, result.status, result.body);
+}
+
+/** Read the request `Origin` header (case-insensitive) as a string or undefined. */
+function getRequestOrigin(req: IncomingMessage): string | undefined {
+  // Node lowercases header names, but be defensive against proxies that don't.
+  const raw =
+    (req.headers.origin as string | string[] | undefined) ??
+    (req.headers.Origin as string | string[] | undefined);
+  if (Array.isArray(raw)) return raw[0];
+  return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
 }

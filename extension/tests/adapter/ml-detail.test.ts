@@ -240,6 +240,53 @@ describe('ml-detail adapter — fixed contract', () => {
       expect(reviews[0].text).toBe('Buen producto');
       expect(reviews[0].rating).toBe(3);
     });
+
+    it('filters out empty-text review items (rating-only / content selector miss)', () => {
+      // Two matched __comment items: one with body text, one with NO content
+      // element (rating-only review or a selector miss). The DOM path MUST drop
+      // the empty one so the pipeline shows the empty state when ALL are empty
+      // and never POSTs blank "1. " lines to the proxy.
+      const doc = dom(
+        '<html><body><div class="ui-review-capability-comments">' +
+          '<article class="ui-review-capability-comments__comment">' +
+          '<div class="ui-review-capability-comments__comment__rating">' +
+          '<svg class="ui-review-capability-comments__comment__rating__star"><use href="#poly_star_fill"></use></svg>' +
+          '</div>' +
+          '<p class="ui-review-capability-comments__comment__content">Buen producto</p>' +
+          '</article>' +
+          '<article class="ui-review-capability-comments__comment">' +
+          '<div class="ui-review-capability-comments__comment__rating">' +
+          '<svg class="ui-review-capability-comments__comment__rating__star"><use href="#poly_star_fill"></use></svg>' +
+          '</div>' +
+          // No __content element -> text would be '' without the filter.
+          '</article>' +
+          '</div></body></html>',
+      );
+      const reviews = extractDetail(doc).reviews;
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0].text).toBe('Buen producto');
+    });
+
+    it('returns zero reviews when every matched item has empty text', () => {
+      // All matched items lack a __content element -> every text is '' -> the
+      // filter drops them all -> zero reviews -> the pipeline renders the empty
+      // state instead of POSTing blank lines to the proxy.
+      const doc = dom(
+        '<html><body><div class="ui-review-capability-comments">' +
+          '<article class="ui-review-capability-comments__comment">' +
+          '<div class="ui-review-capability-comments__comment__rating">' +
+          '<svg class="ui-review-capability-comments__comment__rating__star"><use href="#poly_star_fill"></use></svg>' +
+          '</div>' +
+          '</article>' +
+          '<article class="ui-review-capability-comments__comment">' +
+          '<div class="ui-review-capability-comments__comment__rating">' +
+          '<svg class="ui-review-capability-comments__comment__rating__star"><use href="#poly_star_fill"></use></svg>' +
+          '</div>' +
+          '</article>' +
+          '</div></body></html>',
+      );
+      expect(extractDetail(doc).reviews).toEqual([]);
+    });
   });
 
   describe('hasMoreReviewsHint (frozen .show-more-click control)', () => {

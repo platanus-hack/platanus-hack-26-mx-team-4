@@ -62,7 +62,53 @@ export function main(): void {
     return;
   }
   if (isDetailPageRoute()) {
-    runDetailSummary();
+    // Issue 5a + bfcache: keep the controller so we can destroy it on unload.
+    // Without this, a PDP that genuinely has no reviews leaves the
+    // MutationObserver attached forever (it keeps re-extracting on every body
+    // mutation). The `pagehide` listener tears the controller down (stops the
+    // observer + removes the card) when the page is TRULY unloaded.
+    //
+    // bfcache: on back/forward navigation the browser freezes the page into
+    // the back/forward cache and fires `pagehide` with `event.persisted ===
+    // true`, then restores it via `pageshow` with `persisted === true`. The
+    // content script does NOT re-run on restore, so destroying on a
+    // persisted=true pagehide would permanently lose the summary card after a
+    // normal back-navigation. We therefore only destroy on `persisted ===
+    // false`, and re-initialize the summary on a persisted `pageshow` so the
+    // card comes back (and any mid-flight state frozen with the page is
+    // replaced with a fresh controller). A single controller reference is kept
+    // and replaced on re-init; destroy() is idempotent so a double-destroy is
+    // harmless.
+    let controller = runDetailSummary();
+    if (typeof window !== 'undefined') {
+      const onPageHide = (event: PageTransitionEvent): void => {
+        // Only tear down on a REAL unload. On a bfcache freeze (persisted true)
+        // keep the controller alive so the frozen DOM (with its card) restores.
+        if (event.persisted === false) {
+          controller.destroy();
+        }
+      };
+      const onPageShow = (event: PageTransitionEvent): void => {
+        // bfcache restore: the browser restores the FROZEN DOM, including our
+        // card, alive — so the controller frozen with it resumes. Re-mounting
+        // unconditionally would tear down that live card and re-run the whole
+        // pipeline, which RE-FETCHES the proxy/Gemini on a cache miss and wastes
+        // quota on a normal back-navigation. So only re-init when the card is
+        // actually GONE (restored without it, or previously destroyed); if a
+        // live card is present, keep it untouched.
+        if (event.persisted === true && isDetailPageRoute()) {
+          const cardAlive = document.querySelector('[data-ml-summary]') != null;
+          if (!cardAlive) {
+            controller.destroy();
+            controller = runDetailSummary();
+          }
+        }
+      };
+      // NOT `once`: the listeners must survive repeated bfcache freeze/restore
+      // cycles. On a real unload (persisted false) the page is gone anyway.
+      window.addEventListener('pagehide', onPageHide);
+      window.addEventListener('pageshow', onPageShow);
+    }
     return;
   }
 }
