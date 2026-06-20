@@ -37,15 +37,40 @@ export type ScoredCard = ParsedCard & {
   originalIndex: number;
 };
 
-/** Hardcoded ranking weights. */
+/**
+ * Ranking weights (configurable). Defaults live in `src/config.ts`.
+ *   w1     — shrunk-rating weight (dominant trust signal)
+ *   w2     — price-quality ratio weight
+ *   w3     — sponsored penalty
+ *   w4     — log-sold volume weight
+ *   priorC — Bayesian shrinkage prior (confidence strength for the page mean)
+ *
+ * With `priorC = 0` and `w4 = 0` the v2 formula reduces to the v1 one
+ * (`w1*ratingNorm + w2*priceNorm - w3*sponsoredPenalty`), preserving prior
+ * importer behavior.
+ */
 export type RankConfig = {
   w1: number;
   w2: number;
   w3: number;
+  w4: number;
+  priorC: number;
 };
 
-/** Page-level price statistics used for z-score normalization. */
+/**
+ * Page-level statistics used for normalization.
+ *   mean/stddev — over present prices (z-score price normalization)
+ *   ratingMean  — mean over PRESENT (non-null, finite) ratings; 0 when none.
+ *                 Null ratings are excluded (spec: rating=null scores 0).
+ *   maxSales    — max non-negative sold count on the page; 0 when none.
+ *   minSales    — min non-negative sold count on the page; 0 when none.
+ *                 maxSales === minSales flags a degenerate (single-card /
+ *                 all-equal) page, for which `logSalesNorm` returns 0.
+ */
 export type PageStats = {
   mean: number;
   stddev: number;
+  ratingMean: number;
+  maxSales: number;
+  minSales: number;
 };

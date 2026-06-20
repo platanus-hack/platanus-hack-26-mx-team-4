@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { RANK_CONFIG } from '../../src/config';
-import { ratingNorm, computePageStats, priceNorm, sponsoredPenalty } from '../../src/ranking/normalize';
+import { ratingNorm, computePageStats, computeCardPageStats, priceNorm, sponsoredPenalty } from '../../src/ranking/normalize';
 import { computeQualityScore, rank } from '../../src/ranking/score';
 import type { CardSignals, ParsedCard, RankConfig } from '../../src/ranking/types';
 
@@ -57,24 +57,34 @@ describe('normalize', () => {
   });
 
   describe('priceNorm', () => {
+    // priceNorm only reads mean/stddev; the rating/sales fields are padded so the
+    // literal satisfies the extended PageStats type without changing behavior.
+    const priceStats = (mean: number, stddev: number) => ({
+      mean,
+      stddev,
+      ratingMean: 0,
+      maxSales: 0,
+      minSales: 0,
+    });
+
     it('returns 0 for null/missing price', () => {
-      expect(priceNorm(null, { mean: 100, stddev: 20 })).toBe(0);
+      expect(priceNorm(null, priceStats(100, 20))).toBe(0);
     });
 
     it('returns (mean - price) / max(stddev, 1e-6); cheaper-than-mean is positive', () => {
-      expect(priceNorm(50, { mean: 100, stddev: 20 })).toBeCloseTo(2.5, 10);
-      expect(priceNorm(150, { mean: 100, stddev: 20 })).toBeCloseTo(-2.5, 10);
+      expect(priceNorm(50, priceStats(100, 20))).toBeCloseTo(2.5, 10);
+      expect(priceNorm(150, priceStats(100, 20))).toBeCloseTo(-2.5, 10);
     });
 
     it('uses the epsilon denominator when stddev is 0 and produces a finite value', () => {
       // uniform prices: mean == price -> (mean - price) = 0 -> 0 / 1e-6 = 0 (finite, not NaN/Infinity)
-      const n = priceNorm(100, { mean: 100, stddev: 0 });
+      const n = priceNorm(100, priceStats(100, 0));
       expect(Number.isFinite(n)).toBe(true);
       expect(n).toBe(0);
     });
 
     it('is finite even for price 0 with a zero stddev page', () => {
-      const n = priceNorm(0, { mean: 0, stddev: 0 });
+      const n = priceNorm(0, priceStats(0, 0));
       expect(Number.isFinite(n)).toBe(true);
     });
   });
@@ -88,18 +98,44 @@ describe('normalize', () => {
 });
 
 describe('computeQualityScore', () => {
-  it('applies the formula score = w1*ratingNorm + w2*priceNorm - w3*sponsoredPenalty', () => {
-    const stats = { mean: 100, stddev: 20 };
-    // rating=5 -> 1, price=50 -> (100-50)/20 = 2.5, not sponsored -> 0
-    // score = 0.6*1 + 0.3*2.5 - 0.4*0 = 0.6 + 0.75 = 1.35
+  it('applies the v2 formula; in the degenerate case (rating=mean, all-equal sales) it coincides with 1.35', () => {
+    const stats = { mean: 100, stddev: 20, ratingMean: 5, maxSales: 10, minSales: 10 };
+    // rating=5=ratingMean & sales=10=prior sales -> shrunkRating = 5/5 = 1 (= ratingNorm)
+    // price=50 -> (100-50)/20 = 2.5; all-equal sales -> logSalesNorm = 0; not sponsored
+    // score = w1*1 + w2*2.5 - w3*0 + w4*0 = 0.6 + 0.75 = 1.35
     expect(computeQualityScore(card({ id: 'a', rating: 5, reviewCount: 10, price: 50, sponsored: false }), stats, CFG)).toBeCloseTo(1.35, 10);
   });
 
   it('subtracts the sponsored penalty', () => {
-    const stats = { mean: 100, stddev: 20 };
+    const stats = { mean: 100, stddev: 20, ratingMean: 5, maxSales: 10, minSales: 10 };
     const base = computeQualityScore(card({ id: 'a', rating: 5, reviewCount: 10, price: 50, sponsored: false }), stats, CFG);
     const sponsored = computeQualityScore(card({ id: 'b', rating: 5, reviewCount: 10, price: 50, sponsored: true }), stats, CFG);
     expect(base - sponsored).toBeCloseTo(CFG.w3, 10); // 0.4
+  });
+
+  it('applies the v2 formula with real shrinkage and a non-zero log-sales term', () => {
+    const cards = [
+      card({ id: 'x', rating: 4, reviewCount: 100, price: 50, sponsored: false }),
+      card({ id: 'y', rating: 5, reviewCount: 0, price: 50, sponsored: false }),
+    ];
+    const stats = computeCardPageStats(cards);
+    // prices=[50,50] -> mean=50, stddev=0 -> priceNorm=0 for both
+    // ratings=[4,5] -> ratingMean=4.5; sales=[100,0] -> max=100, min=0
+    // x: shrunkRating(4,100,4.5,5) = (5*4.5+100*4)/105 /5 = 0.8047619; logSalesNorm=1
+    //    score_x = 0.6*0.8047619 + 0 + 0 + 0.3*1 = 0.7828571
+    // y: shrunkRating(5,0,4.5,5) = 4.5/5 = 0.9; logSalesNorm=0
+    //    score_y = 0.6*0.9 = 0.54
+    expect(computeQualityScore(cards[0], stats, CFG)).toBeCloseTo(0.7828571429, 6);
+    expect(computeQualityScore(cards[1], stats, CFG)).toBeCloseTo(0.54, 10);
+  });
+
+  it('ranks a high-sales card strictly above an equal-signal low-sales card (logSalesNorm drives the gap)', () => {
+    const low = card({ id: 'low', rating: 4.5, reviewCount: 5, price: 100, sponsored: false });
+    const high = card({ id: 'high', rating: 4.5, reviewCount: 500, price: 100, sponsored: false });
+    const stats = computeCardPageStats([low, high]);
+    // Equal rating/price/sponsored -> equal shrunkRating and priceNorm; the ONLY
+    // difference is logSalesNorm, so the high-sales score must be strictly greater.
+    expect(computeQualityScore(high, stats, CFG)).toBeGreaterThan(computeQualityScore(low, stats, CFG));
   });
 
   it('produces a finite score for missing rating and missing price', () => {
@@ -112,6 +148,41 @@ describe('computeQualityScore', () => {
     const stats = computePageStats([100, 100, 100]);
     const s = computeQualityScore(card({ id: 'a', rating: 4, reviewCount: 5, price: 100, sponsored: false }), stats, CFG);
     expect(Number.isFinite(s)).toBe(true);
+  });
+});
+
+describe('computeQualityScore — backward compatibility (priorC=0 and w4=0)', () => {
+  // With priorC = 0 the shrunk rating reduces to rating/5 (== ratingNorm) for
+  // every card, and with w4 = 0 the log-sales term contributes nothing. So the
+  // v2 formula MUST equal the v1 one: w1*ratingNorm + w2*priceNorm - w3*sponsored.
+  // This characterization test was green against v1 score.ts and MUST stay green
+  // after the v2 refactor — it pins the contract relied on by prior importers.
+  const compat: RankConfig = { w1: 0.6, w2: 0.3, w3: 0.4, w4: 0, priorC: 0 };
+  // Full stats with a non-trivial ratingMean and sales spread so a broken
+  // priorC=0 path (e.g. accidentally using the default prior) would diverge.
+  const stats = { mean: 100, stddev: 20, ratingMean: 4.5, maxSales: 1000, minSales: 0 };
+
+  const v1 = (c: CardSignals): number =>
+    0.6 * ratingNorm(c.rating) + 0.3 * priceNorm(c.price, stats) - 0.4 * sponsoredPenalty(c.sponsored);
+
+  it('matches the v1 formula for a rated, sold, organic card', () => {
+    const c = card({ id: 'a', rating: 4.8, reviewCount: 500, price: 50, sponsored: false });
+    expect(computeQualityScore(c, stats, compat)).toBeCloseTo(v1(c), 10);
+  });
+
+  it('matches the v1 formula for an unrated card (null rating -> 0)', () => {
+    const c = card({ id: 'b', rating: null, reviewCount: 0, price: 150, sponsored: false });
+    expect(computeQualityScore(c, stats, compat)).toBeCloseTo(v1(c), 10);
+  });
+
+  it('matches the v1 formula for a sponsored card', () => {
+    const c = card({ id: 'c', rating: 5, reviewCount: 10, price: 50, sponsored: true });
+    expect(computeQualityScore(c, stats, compat)).toBeCloseTo(v1(c), 10);
+  });
+
+  it('matches the v1 formula for a rated card with zero sales (C+s=0 -> rating/5)', () => {
+    const c = card({ id: 'd', rating: 4, reviewCount: 0, price: 100, sponsored: false });
+    expect(computeQualityScore(c, stats, compat)).toBeCloseTo(v1(c), 10);
   });
 });
 
@@ -141,6 +212,13 @@ describe('rank', () => {
     const ad = parsedCard({ id: 'ad', rating: 4.5, reviewCount: 50, price: 100, sponsored: true }, {} as HTMLElement);
     const out = rank([ad, organic], CFG); // sponsored input first
     expect(out.map((c) => c.id)).toEqual(['org', 'ad']); // organic sinks the ad
+  });
+
+  it('orders a high-sales card above an equal-signal low-sales card (logSalesNorm, not the tie-breaker)', () => {
+    const low = parsedCard({ id: 'low', rating: 4.5, reviewCount: 5, price: 100, sponsored: false }, {} as HTMLElement);
+    const high = parsedCard({ id: 'high', rating: 4.5, reviewCount: 500, price: 100, sponsored: false }, {} as HTMLElement);
+    const out = rank([low, high], CFG); // low-sales input first
+    expect(out.map((c) => c.id)).toEqual(['high', 'low']); // high-sales wins on score
   });
 
   it('preserves original order on exact ties (no reliability tie-break difference)', () => {
