@@ -122,20 +122,20 @@ export function createSummaryView(host: HTMLElement): SummaryView {
     msg.textContent = error.message;
     body.appendChild(msg);
 
-    if (onRetry && error.kind !== 'rate-limited') {
+    if (error.kind === 'rate-limited') {
+      // 429 (rate limit / quota): retrying now won't help, so instead of a dead
+      // disabled button we show a calm hint. Keeps the failed state looking
+      // intentional and polished rather than broken.
+      const hint = document.createElement('p');
+      hint.className = 'ml-summary-card__hint';
+      hint.textContent = 'Volvé a intentarlo más tarde.';
+      body.appendChild(hint);
+    } else if (onRetry) {
       const retry = document.createElement('button');
       retry.type = 'button';
       retry.className = 'ml-summary-card__retry';
       retry.textContent = 'Reintentar';
       retry.addEventListener('click', onRetry);
-      body.appendChild(retry);
-    } else if (error.kind === 'rate-limited') {
-      // 429: show a disabled retry so the user understands it is temporary.
-      const retry = document.createElement('button');
-      retry.type = 'button';
-      retry.className = 'ml-summary-card__retry';
-      retry.disabled = true;
-      retry.textContent = 'Reintentar';
       body.appendChild(retry);
     }
   }

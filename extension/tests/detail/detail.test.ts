@@ -152,12 +152,13 @@ describe('runDetailSummary — empty + error states', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it('renders a disabled retry on 429 (rate-limited)', async () => {
+  it('renders a calm hint and no retry button on 429 (rate-limited)', async () => {
     mountPdp(REVIEWS);
     const fetchImpl = vi.fn(() => Promise.resolve(jsonRes({}, 429))) as unknown as typeof fetch;
     runDetailSummary({ doc: document, url: PRODUCT_URL, fetchImpl });
     await vi.waitFor(() => expect(cardState()).toBe('error'));
-    expect(card().querySelector<HTMLButtonElement>('.ml-summary-card__retry')!.disabled).toBe(true);
+    expect(card().querySelector('.ml-summary-card__retry')).toBeNull();
+    expect(card().querySelector('.ml-summary-card__hint')).not.toBeNull();
   });
 });
 

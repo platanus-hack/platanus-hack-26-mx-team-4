@@ -43,10 +43,10 @@ export async function fetchSummary(
   }
 
   if (res.status === 429) {
-    return error('rate-limited', 'Demasiadas solicitudes. Intentá de nuevo en unos segundos.');
+    return error('rate-limited', 'El resumen con IA alcanzó el límite de uso por ahora. Volvé a intentarlo más tarde.');
   }
   if (!res.ok) {
-    return error('proxy-error', `El servicio de resumen respondió ${res.status}.`);
+    return error('proxy-error', 'No pudimos generar el resumen en este momento.');
   }
 
   let json: unknown;

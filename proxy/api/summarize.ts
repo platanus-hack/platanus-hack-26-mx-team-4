@@ -206,8 +206,13 @@ export async function handleRequest(
   }
   const result = await summarizeWithGemini(request, apiKey, fetchImpl);
   if (!result.ok) {
-    // 502 keeps the stable `error` code; `reason` + `gemini_status` are added
-    // for diagnosis only (safe: a status code, never the key or Gemini's body).
+    // A Gemini 429 (rate limit / quota) is propagated AS 429 so the extension
+    // can render its polished "límite de uso" state instead of a raw 5xx. Every
+    // other upstream failure maps to 502 with `reason` + `gemini_status` for
+    // diagnosis (safe: just a status code, never the key or Gemini's body).
+    if (result.reason === 'http_error' && result.upstreamStatus === 429) {
+      return { status: 429, body: { error: 'rate_limited', gemini_status: 429 } };
+    }
     return {
       status: 502,
       body: {

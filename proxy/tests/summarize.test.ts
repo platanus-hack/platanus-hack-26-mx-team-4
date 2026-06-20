@@ -217,6 +217,13 @@ describe('handleRequest — HTTP status mapping', () => {
     });
   });
 
+  it('429 from Gemini is propagated AS 429 (rate_limited) so the client renders the limit state', async () => {
+    const f = mockFetch(() => jsonRes({ error: { message: 'quota exceeded' } }, { status: 429 }));
+    const r = await handleRequest(REQUEST, API_KEY, f);
+    expect(r.status).toBe(429);
+    expect(r.body).toEqual({ error: 'rate_limited', gemini_status: 429 });
+  });
+
   it('502 body never leaks the API key', async () => {
     const f = mockFetch(() => jsonRes({ error: 'forbidden' }, { status: 403 }));
     const r = await handleRequest(REQUEST, API_KEY, f);

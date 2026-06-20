@@ -124,13 +124,15 @@ describe('summary UI — error + retry', () => {
     expect(retried).toBe(1);
   });
 
-  it('showError for rate-limited (429) renders a DISABLED retry button', () => {
+  it('showError for rate-limited (429) renders a calm hint and NO retry button', () => {
     const view = createSummaryView(host);
-    const error: SummaryError = { kind: 'rate-limited', message: 'Demasiadas solicitudes.' };
+    const error: SummaryError = { kind: 'rate-limited', message: 'Límite de uso alcanzado.' };
     view.showError(error, () => {});
-    const btn = view.el.querySelector<HTMLButtonElement>('.ml-summary-card__retry');
-    expect(btn).not.toBeNull();
-    expect(btn!.disabled).toBe(true);
+    // No dead/disabled button: retrying now won't help on a quota error.
+    expect(view.el.querySelector('.ml-summary-card__retry')).toBeNull();
+    const hint = view.el.querySelector('.ml-summary-card__hint');
+    expect(hint).not.toBeNull();
+    expect(hint!.textContent).toBe('Volvé a intentarlo más tarde.');
   });
 
   it('showError without an onRetry callback renders no retry button', () => {
