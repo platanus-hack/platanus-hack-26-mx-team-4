@@ -31,13 +31,18 @@ export function isListingRoute(url: string = location.href): boolean {
 
 /**
  * Detect MercadoLibre product-detail pages (PDPs): served from the `articulo.*`
- * host family, or via the `/p/` short route on any ML host. Accepts an optional
- * `url` for unit testing. Returns false for listings and all other pages.
+ * host family, or via the catalog `/p/<id>` (and `/up/<id>`) route on any ML
+ * host. Real catalog PDPs are `www.mercadolibre.<tld>/<slug>/p/<id>`, so the
+ * `/p/` (or `/up/`) segment is NOT at the start of the path — we match it
+ * anywhere in the path, but only when followed by an ML id (`M` + 1-3 letters +
+ * digits) to avoid false positives. Accepts an optional `url` for unit testing.
+ * Returns false for listings and all other pages.
  */
 export function isDetailPageRoute(url: string = location.href): boolean {
   try {
     const u = new URL(url);
-    return u.hostname.startsWith('articulo.') || u.pathname.startsWith('/p/');
+    if (u.hostname.startsWith('articulo.')) return true;
+    return /\/(?:p|up)\/M[A-Z]{1,3}\d+/i.test(u.pathname);
   } catch {
     return false;
   }

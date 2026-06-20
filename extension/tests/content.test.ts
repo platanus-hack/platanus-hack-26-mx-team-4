@@ -37,9 +37,22 @@ describe('isDetailPageRoute — PDP detection', () => {
     expect(isDetailPageRoute('https://articulo.mercadolibre.com.br/MLB1-z')).toBe(true);
   });
 
-  it('detects the /p/ short route on any ML host', () => {
+  it('detects catalog /p/<id> PDPs with a leading product slug (real ML URLs)', () => {
+    expect(
+      isDetailPageRoute('https://www.mercadolibre.com.mx/audifonos-in-ear-1hora/p/MLM68725493'),
+    ).toBe(true);
+    expect(
+      isDetailPageRoute('https://www.mercadolibre.com.mx/audifonos-in-ear-1hora/p/MLM68725493#reviews'),
+    ).toBe(true);
+    // bare /p/<id> short form still works
     expect(isDetailPageRoute('https://www.mercadolibre.com.mx/p/MLM123')).toBe(true);
     expect(isDetailPageRoute('https://mercadolibre.com.ar/p/MLA999')).toBe(true);
+  });
+
+  it('detects catalog /up/<id> PDPs (e.g. AR catalog URLs)', () => {
+    expect(
+      isDetailPageRoute('https://www.mercadolibre.com.ar/auriculares-smart/up/MLAU3842095417'),
+    ).toBe(true);
   });
 
   it('rejects listing pages', () => {
@@ -51,6 +64,10 @@ describe('isDetailPageRoute — PDP detection', () => {
     expect(isDetailPageRoute('https://www.mercadolibre.com.mx/')).toBe(false);
     expect(isDetailPageRoute('https://mercadolibre.com.mx/ayuda')).toBe(false);
     expect(isDetailPageRoute('https://example.com/')).toBe(false);
+  });
+
+  it('rejects a path that contains /p/ but no ML id (avoids false positives)', () => {
+    expect(isDetailPageRoute('https://www.mercadolibre.com.mx/ofertas/p/promociones')).toBe(false);
   });
 
   it('returns false on an invalid URL (never throws)', () => {
@@ -102,6 +119,15 @@ describe('main() — routing dispatch', () => {
     vi.stubGlobal('location', { href: 'https://www.mercadolibre.com.mx/p/MLM123' });
     main();
     expect(runDetailSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a real catalog PDP (slug + /p/<id>) to the Pilar 2 summary pipeline', () => {
+    vi.stubGlobal('location', {
+      href: 'https://www.mercadolibre.com.mx/audifonos-in-ear-1hora/p/MLM68725493#reviews',
+    });
+    main();
+    expect(runDetailSummaryMock).toHaveBeenCalledTimes(1);
+    expect(findContainerMock).not.toHaveBeenCalled();
   });
 
   it('is a no-op on the home page (neither branch runs)', () => {
