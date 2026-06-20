@@ -2,6 +2,12 @@
 // states: loading (skeleton), result (strong/weak/verdict), empty (no reviews),
 // and error (retryable / rate-limited).
 //
+// LAYOUT: a PERSISTENT header (title + minimize/expand button) is created once
+// and survives every state change; only the BODY is replaced per state. The
+// minimize button toggles `data-ml-collapsed` on the card root (CSS hides the
+// body when collapsed), so the user can shrink the card out of the way without
+// losing the summary.
+//
 // SECURITY/ROBUSTNESS: every user-facing string is set via textContent, NEVER
 // innerHTML. Strong/weak points come from the LLM and are treated as untrusted
 // text — they are never parsed as HTML, so no markup injection is possible.
@@ -29,20 +35,54 @@ export interface SummaryView {
 
 /** Attribute stamped on the card root for state + observer loop-avoidance. */
 const SUMMARY_ATTR = 'data-ml-summary';
+/** Attribute toggled by the minimize button (CSS hides the body when "true"). */
+const COLLAPSED_ATTR = 'data-ml-collapsed';
 
 /**
- * Create a summary card and append it to `host`. The card root is created once
- * and reused across state transitions (each show* replaces only its children),
- * so we do not churn the host and the pipeline observer can ignore us.
+ * Create a summary card and append it to `host`. The card root + its header
+ * (title + minimize button) are created once; only the BODY is replaced across
+ * state transitions, so the minimize control persists and the pipeline observer
+ * can ignore our own writes.
  */
 export function createSummaryView(host: HTMLElement): SummaryView {
   const card = document.createElement('aside');
   card.className = 'ml-summary-card';
   card.setAttribute(SUMMARY_ATTR, 'loading');
+  card.setAttribute(COLLAPSED_ATTR, 'false');
+
+  // Persistent header: title + minimize/expand toggle. Survives state changes.
+  const header = document.createElement('div');
+  header.className = 'ml-summary-card__header';
+  const title = document.createElement('div');
+  title.className = 'ml-summary-card__title';
+  title.textContent = 'Resumen de opiniones';
+  const minimize = document.createElement('button');
+  minimize.type = 'button';
+  minimize.className = 'ml-summary-card__minimize';
+  minimize.setAttribute('aria-expanded', 'true');
+  minimize.setAttribute('aria-label', 'Minimizar resumen');
+  minimize.textContent = '–';
+  minimize.addEventListener('click', toggleCollapsed);
+  header.append(title, minimize);
+
+  // Body: cleared + rebuilt on every state transition.
+  const body = document.createElement('div');
+  body.className = 'ml-summary-card__body';
+
+  card.append(header, body);
   host.appendChild(card);
 
+  function toggleCollapsed(): void {
+    const collapsed = card.getAttribute(COLLAPSED_ATTR) === 'true';
+    const next = !collapsed;
+    card.setAttribute(COLLAPSED_ATTR, String(next));
+    minimize.setAttribute('aria-expanded', String(!next));
+    minimize.textContent = next ? '+' : '–';
+    minimize.setAttribute('aria-label', next ? 'Expandir resumen' : 'Minimizar resumen');
+  }
+
   function clear(): void {
-    while (card.firstChild) card.removeChild(card.firstChild);
+    while (body.firstChild) body.removeChild(body.firstChild);
   }
 
   function setState(state: SummaryState): void {
@@ -52,14 +92,10 @@ export function createSummaryView(host: HTMLElement): SummaryView {
   function showLoading(): void {
     setState('loading');
     clear();
-    const head = document.createElement('div');
-    head.className = 'ml-summary-card__title';
-    head.textContent = 'Resumen de opiniones';
-    card.appendChild(head);
     for (let i = 0; i < 3; i++) {
       const line = document.createElement('div');
       line.className = 'ml-summary-card__skeleton';
-      card.appendChild(line);
+      body.appendChild(line);
     }
   }
 
@@ -69,12 +105,12 @@ export function createSummaryView(host: HTMLElement): SummaryView {
     const msg = document.createElement('p');
     msg.className = 'ml-summary-card__empty';
     msg.textContent = 'Aún no hay opiniones para resumir.';
-    card.appendChild(msg);
+    body.appendChild(msg);
     if (opts?.hasMoreReviewsHint) {
       const hint = document.createElement('p');
       hint.className = 'ml-summary-card__hint';
       hint.textContent = 'Podés expandir las opiniones en la página y recargar.';
-      card.appendChild(hint);
+      body.appendChild(hint);
     }
   }
 
@@ -84,7 +120,7 @@ export function createSummaryView(host: HTMLElement): SummaryView {
     const msg = document.createElement('p');
     msg.className = 'ml-summary-card__error';
     msg.textContent = error.message;
-    card.appendChild(msg);
+    body.appendChild(msg);
 
     if (onRetry && error.kind !== 'rate-limited') {
       const retry = document.createElement('button');
@@ -92,7 +128,7 @@ export function createSummaryView(host: HTMLElement): SummaryView {
       retry.className = 'ml-summary-card__retry';
       retry.textContent = 'Reintentar';
       retry.addEventListener('click', onRetry);
-      card.appendChild(retry);
+      body.appendChild(retry);
     } else if (error.kind === 'rate-limited') {
       // 429: show a disabled retry so the user understands it is temporary.
       const retry = document.createElement('button');
@@ -100,18 +136,13 @@ export function createSummaryView(host: HTMLElement): SummaryView {
       retry.className = 'ml-summary-card__retry';
       retry.disabled = true;
       retry.textContent = 'Reintentar';
-      card.appendChild(retry);
+      body.appendChild(retry);
     }
   }
 
   function showResult(summary: ProxyResponse): void {
     setState('result');
     clear();
-    const head = document.createElement('div');
-    head.className = 'ml-summary-card__title';
-    head.textContent = 'Resumen de opiniones';
-    card.appendChild(head);
-
     appendSection('Puntos a favor', 'ml-summary-card__strong', summary.strongPoints);
     appendSection('Puntos en contra', 'ml-summary-card__weak', summary.weakPoints);
 
@@ -123,7 +154,7 @@ export function createSummaryView(host: HTMLElement): SummaryView {
     const verdict = document.createElement('p');
     verdict.textContent = summary.verdict;
     verdictBox.append(label, verdict);
-    card.appendChild(verdictBox);
+    body.appendChild(verdictBox);
   }
 
   function appendSection(labelText: string, itemClass: string, items: string[]): void {
@@ -148,7 +179,7 @@ export function createSummaryView(host: HTMLElement): SummaryView {
       }
       section.appendChild(list);
     }
-    card.appendChild(section);
+    body.appendChild(section);
   }
 
   function destroy(): void {

@@ -155,3 +155,62 @@ describe('summary UI — error + retry', () => {
     expect(view.el.querySelectorAll('.ml-summary-card__skeleton')).toHaveLength(3);
   });
 });
+
+describe('summary UI — minimize / expand', () => {
+  beforeEach(() => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('mounts a persistent header with a title and a minimize button (starts expanded)', () => {
+    const view = createSummaryView(host);
+    expect(view.el.querySelector('.ml-summary-card__header')).not.toBeNull();
+    expect(view.el.querySelector('.ml-summary-card__title')?.textContent).toBe('Resumen de opiniones');
+    const btn = view.el.querySelector<HTMLButtonElement>('.ml-summary-card__minimize');
+    expect(btn).not.toBeNull();
+    expect(view.el.getAttribute('data-ml-collapsed')).toBe('false');
+    expect(btn!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('clicking the minimize button collapses the card (hides the body)', () => {
+    const view = createSummaryView(host);
+    const btn = view.el.querySelector<HTMLButtonElement>('.ml-summary-card__minimize')!;
+    btn.click();
+    expect(view.el.getAttribute('data-ml-collapsed')).toBe('true');
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
+    expect(btn.textContent).toBe('+');
+  });
+
+  it('clicking again expands the card back', () => {
+    const view = createSummaryView(host);
+    const btn = view.el.querySelector<HTMLButtonElement>('.ml-summary-card__minimize')!;
+    btn.click();
+    btn.click();
+    expect(view.el.getAttribute('data-ml-collapsed')).toBe('false');
+    expect(btn.getAttribute('aria-expanded')).toBe('true');
+    expect(btn.textContent).toBe('–');
+  });
+
+  it('the header (title + minimize) survives state transitions', () => {
+    const view = createSummaryView(host);
+    view.showResult(SUMMARY);
+    view.showEmpty();
+    view.showError({ kind: 'malformed', message: 'x' });
+    // One single persistent header/title/button across all state changes.
+    expect(view.el.querySelectorAll('.ml-summary-card__header')).toHaveLength(1);
+    expect(view.el.querySelectorAll('.ml-summary-card__title')).toHaveLength(1);
+    expect(view.el.querySelectorAll('.ml-summary-card__minimize')).toHaveLength(1);
+  });
+
+  it('content renders inside the body container (not the header)', () => {
+    const view = createSummaryView(host);
+    view.showResult(SUMMARY);
+    const body = view.el.querySelector('.ml-summary-card__body');
+    expect(body).not.toBeNull();
+    expect(body!.querySelector('.ml-summary-card__verdict')).not.toBeNull();
+  });
+});
