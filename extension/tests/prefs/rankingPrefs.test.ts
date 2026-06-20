@@ -11,13 +11,15 @@
 // Económicos. Matching is accent- and case-insensitive so UI labels and stored
 // keys stay robust.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { normalizePrefs, presetToConfig } from '../../src/prefs/rankingPrefs';
+import { normalizePrefs, presetToConfig, loadPrefs, savePrefs } from '../../src/prefs/rankingPrefs';
 import { RANK_CONFIG } from '../../src/config';
 import type { RankConfig } from '../../src/ranking/types';
 
 const DEFAULTS = RANK_CONFIG;
+/** The versioned localStorage key (pinned here so a drift in the module is caught). */
+const PREFS_KEY = 'ml-rerank:prefs:v1';
 
 /** A complete, valid config distinct from every preset (used as stored input). */
 const FULL_VALID: RankConfig = { w1: 0.9, w2: 0.2, w3: 0.5, w4: 0.4, priorC: 10 };
@@ -195,5 +197,114 @@ describe('manual slider override -> custom config (Phase 2.2)', () => {
     const manual: RankConfig = { w1: 0.8, w2: 0.7, w3: 0.2, w4: 0.6, priorC: 8 };
     expect(normalizePrefs(manual)).toEqual(manual);
     expect(normalizePrefs(manual)).not.toBe(manual);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 — persistence adapter (localStorage, opaque-origin fallback).
+// Mirrors src/ui/toggle.ts: missing/corrupt/invalid/unavailable storage falls
+// back to defaults and NEVER throws. Uses the global vitest jsdom window, which
+// vitest.config.ts configures with the real ML listing URL so localStorage is
+// available (non-opaque origin) — the same setup toggle.test.ts relies on.
+// ---------------------------------------------------------------------------
+
+/** Clear the prefs key so state never leaks between tests. Safe when the
+ *  global localStorage accessor was stubbed to throw (no-op). */
+function clearPrefs(): void {
+  try {
+    localStorage.removeItem(PREFS_KEY);
+  } catch {
+    // storage blocked in this test — nothing to clear
+  }
+}
+
+describe('loadPrefs / savePrefs — localStorage persistence', () => {
+  beforeEach(() => clearPrefs());
+  afterEach(() => clearPrefs());
+
+  it('loadPrefs returns defaults when the key is missing', () => {
+    expect(localStorage.getItem(PREFS_KEY)).toBeNull();
+    expect(loadPrefs()).toEqual(DEFAULTS);
+  });
+
+  it('savePrefs writes JSON to the versioned key, loadPrefs reads it back', () => {
+    const cfg: RankConfig = { w1: 0.9, w2: 0.2, w3: 0.5, w4: 0.4, priorC: 10 };
+    savePrefs(cfg);
+    expect(localStorage.getItem(PREFS_KEY)).toBe(JSON.stringify(cfg));
+    expect(loadPrefs()).toEqual(cfg);
+  });
+
+  it('loadPrefs uses the stored config for the first rank (valid stored prefs)', () => {
+    const stored: RankConfig = { w1: 0.7, w2: 0.6, w3: 0.3, w4: 0.5, priorC: 7 };
+    localStorage.setItem(PREFS_KEY, JSON.stringify(stored));
+    expect(loadPrefs()).toEqual(stored);
+  });
+
+  it('loadPrefs falls back to defaults on corrupt JSON (no throw)', () => {
+    localStorage.setItem(PREFS_KEY, '{not valid json');
+    expect(() => loadPrefs()).not.toThrow();
+    expect(loadPrefs()).toEqual(DEFAULTS);
+  });
+
+  it('loadPrefs falls back to defaults on a valid-JSON invalid shape (no throw)', () => {
+    localStorage.setItem(PREFS_KEY, JSON.stringify('just-a-string'));
+    expect(loadPrefs()).toEqual(DEFAULTS);
+    localStorage.setItem(PREFS_KEY, JSON.stringify([1, 2, 3]));
+    expect(loadPrefs()).toEqual(DEFAULTS);
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ w1: 'bad' }));
+    expect(loadPrefs()).toEqual(DEFAULTS);
+  });
+
+  it('loadPrefs normalizes/clamps stored values (negative -> 0, missing -> default)', () => {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ w1: -1, w4: 0.9 }));
+    expect(loadPrefs()).toEqual({ ...DEFAULTS, w1: 0, w4: 0.9 });
+  });
+
+  it('savePrefs -> loadPrefs round-trips a preset config unchanged', () => {
+    const cfg = presetToConfig('Más vendidos');
+    savePrefs(cfg);
+    expect(loadPrefs()).toEqual(cfg);
+  });
+
+  // NOTE: the localStorage-throws tests are placed LAST in this block, mirroring
+  // toggle.test.ts: `delete (window).localStorage` after stubbing does not
+  // fully restore jsdom's prototype accessor for a LATER test in the same file,
+  // so nothing after these two should rely on a working localStorage.
+
+  it('loadPrefs never throws when localStorage access throws (opaque origin / privacy mode)', () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => {
+        throw new TypeError('localStorage is not available for opaque origins');
+      },
+      set: () => {
+        throw new TypeError('localStorage is not available for opaque origins');
+      },
+    });
+    try {
+      expect(() => loadPrefs()).not.toThrow();
+      expect(loadPrefs()).toEqual(DEFAULTS);
+    } finally {
+      // Remove the own accessor so the prototype accessor jsdom installed is
+      // used again by subsequent tests.
+      delete (window as unknown as { localStorage?: Storage }).localStorage;
+    }
+  });
+
+  it('savePrefs never throws when localStorage access throws (opaque origin / privacy mode)', () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => {
+        throw new TypeError('localStorage is not available for opaque origins');
+      },
+      set: () => {
+        throw new TypeError('localStorage is not available for opaque origins');
+      },
+    });
+    try {
+      expect(() => savePrefs(DEFAULTS)).not.toThrow();
+    } finally {
+      delete (window as unknown as { localStorage?: Storage }).localStorage;
+    }
   });
 });

@@ -1,9 +1,16 @@
-// Ranking preferences — PURE core (Phase 2). No DOM, no storage, no globals.
+// Ranking preferences — PURE core (Phase 2) + persistence adapter (Phase 3).
 //
-// `normalizePrefs` validates/clamps/merges raw input against the default
-// `RankConfig`; `presetToConfig` maps preset names to complete weight sets. Both
-// NEVER throw on corrupt input (spec: "Missing, corrupt, invalid, or
-// unavailable ... MUST fall back to defaults and MUST NOT throw").
+// Two layers live here:
+//   1. PURE core (no DOM, no storage, no globals): `normalizePrefs` and
+//      `presetToConfig`. They validate/clamp/merge raw input against the
+//      default `RankConfig` and map preset names to complete weight sets. They
+//      NEVER throw on corrupt input (spec: "Missing, corrupt, invalid, or
+//      unavailable ... MUST fall back to defaults and MUST NOT throw").
+//   2. PERSISTENCE adapter (Phase 3): `loadPrefs` / `savePrefs` read/write the
+//      page's `localStorage` key `ml-rerank:prefs:v1`, mirroring the exact
+//      opaque-origin try/catch fallback of `src/ui/toggle.ts`. Any storage
+//      failure (opaque origin, privacy mode, quota, disabled) degrades to the
+//      in-memory defaults and never lets an exception escape.
 //
 // Canonical preset identifiers are the Spanish UI chip labels (tasks #800
 // Phase 2.1 + design #799): Balanceado, Mejor valorados, Más vendidos,
@@ -12,6 +19,9 @@
 
 import type { RankConfig } from '../ranking/types';
 import { RANK_CONFIG } from '../config';
+
+/** Page localStorage key for the persisted ranking prefs (versioned). */
+export const PREFS_STORAGE_KEY = 'ml-rerank:prefs:v1';
 
 /**
  * Complete RankConfig weight sets for each preset.
@@ -94,4 +104,43 @@ export function normalizePrefs(raw: unknown): RankConfig {
     w4: normalizeField(r.w4, RANK_CONFIG.w4),
     priorC: normalizeField(r.priorC, RANK_CONFIG.priorC),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 — persistence adapter (side-effectful, isolated).
+// Mirrors `src/ui/toggle.ts` opaque-origin try/catch fallback exactly: any
+// localStorage access failure degrades to defaults and never throws.
+// ---------------------------------------------------------------------------
+
+/**
+ * Load persisted ranking prefs from the page's `localStorage`.
+ *
+ *   valid stored   -> the stored config, normalized (clamped/merged).
+ *   missing        -> defaults.
+ *   corrupt JSON   -> defaults (no throw).
+ *   invalid shape  -> defaults via `normalizePrefs` (no throw).
+ *   storage throws -> defaults (opaque origin / privacy mode / disabled; no
+ *                     exception escapes, mirroring `toggle.ts`).
+ */
+export function loadPrefs(): RankConfig {
+  try {
+    const raw = localStorage.getItem(PREFS_STORAGE_KEY);
+    if (raw == null) return { ...RANK_CONFIG };
+    return normalizePrefs(JSON.parse(raw));
+  } catch {
+    return { ...RANK_CONFIG };
+  }
+}
+
+/**
+ * Persist `config` to the page's `localStorage` as JSON. Silently swallows any
+ * storage failure (opaque origin / privacy mode / quota) so a save never breaks
+ * the current page view — mirroring `toggle.ts`'s `writePersistedState`.
+ */
+export function savePrefs(config: RankConfig): void {
+  try {
+    localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(config));
+  } catch {
+    // localStorage unavailable — degrade gracefully; no exception escapes.
+  }
 }
