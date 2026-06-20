@@ -1,0 +1,21 @@
+{
+  "name": "ml-rerank",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Re-ranks MercadoLibre search results by visible quality signals (Pilar 1, Chrome MV3, permission-free).",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.25",
+    "@types/node": "^22.9.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.8"
+  }
+}
