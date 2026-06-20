@@ -9,8 +9,8 @@ Track: ☎️ Legacy
 team-4
 
 - Gutiérrez Silva Francisco Omar ([@thefoxkiing](https://github.com/thefoxkiing))
-- Kevin Ariel Trujillo Vargas ([@k3v0no](https://github.com/k3v0no))
 - Diego Garcia Cuanalo ([@cuaniz](https://github.com/cuaniz))
+- Kevin Ariel Trujillo Vargas ([@k3v0no](https://github.com/k3v0no))
 - Iker Itzae Aguilar Souza ([@iker4000](https://github.com/iker4000))
 
 Before Submitting:
