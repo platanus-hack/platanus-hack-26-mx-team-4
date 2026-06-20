@@ -58,3 +58,33 @@ describe('manifest — minimal permission delta (Pilar 2)', () => {
     expect(serialized).not.toMatch(/GEMINI_API_KEY/);
   });
 });
+
+// Phase 6.2 — prefs persistence invariant (spec: "Permission invariant"):
+// personalized ranking stores preferences in the PAGE's localStorage (shared
+// by content scripts at the page origin, same opaque-origin fallback as the
+// toggle), so the manifest MUST gain NO new permission for it — in particular
+// no `storage` API permission and no new host_permission. This pins that
+// invariant against future regressions (e.g. someone reaching for
+// chrome.storage would add `storage` and break Pilar 1's permission-free
+// promise).
+describe('manifest — prefs persistence adds NO permission (Phase 6.2)', () => {
+  it('declares NO `storage` permission (prefs use page localStorage, not chrome.storage)', () => {
+    // No `permissions` array at all -> `storage` cannot be present.
+    expect(extra.permissions).toBeUndefined();
+    const serialized = JSON.stringify(m);
+    expect(serialized).not.toMatch(/\bstorage\b/);
+  });
+
+  it('keeps host_permissions unchanged (no new host for prefs)', () => {
+    // Still exactly the single Vercel proxy host_permission from Pilar 2 —
+    // prefs added nothing here.
+    expect(m.host_permissions).toEqual(['https://hackaton-two-delta.vercel.app/*']);
+  });
+
+  it('the permissions array (if introduced later) would not include storage — snapshot baseline', () => {
+    // Baseline: there is currently no permissions field. If a future change
+    // adds one, it must NOT contain `storage`; this asserts the current
+    // unchanged state so any delta is caught.
+    expect(extra.permissions).toBeUndefined();
+  });
+});

@@ -15,6 +15,7 @@ import { rank } from '../../src/ranking/score';
 import { RANK_CONFIG } from '../../src/config';
 import type { RankConfig } from '../../src/ranking/types';
 import { createReorderer, startReranking } from '../../src/observe';
+import { mountToggle } from '../../src/ui/toggle';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturePath = resolve(here, '..', 'fixtures', 'ml-search.html');
@@ -303,5 +304,78 @@ describe('updateConfig — zero-network re-rank of current DOM', () => {
     expect(rows[rows.length - 1]).not.toBe(clone);
 
     reorderer.destroy();
+  });
+});
+
+// Phase 6.1 — cross-cutting invariant (spec: "Toggle restore remains exact"):
+// a prefs-driven re-rank (updateConfig) must NOT corrupt the toggle's original-
+// order snapshot. Turning the toggle OFF after a config change still restores
+// the EXACT MercadoLibre-served order. updateConfig reuses reorder() and never
+// touches toggle.ts's originalOrder WeakMap, so the snapshot is structurally
+// isolated; this test pins that invariant against future regressions.
+describe('cross-cutting: toggle OFF restores exact order after prefs-driven reorder (Phase 6.1)', () => {
+  // A price-heavy config that produces an order distinct from RANK_CONFIG on the
+  // fixture (same one used by the updateConfig block above).
+  const PRICE_HEAVY: RankConfig = { w1: 0.05, w2: 2.0, w3: 0.0, w4: 0.05, priorC: 5 };
+
+  beforeEach(() => freshFixture());
+
+  afterEach(() => {
+    // The toggle pill is appended to the GLOBAL document.body; clean it and the
+    // persisted toggle state so nothing leaks between tests.
+    document.body.innerHTML = '';
+    try {
+      localStorage.removeItem('ml-rerank:enabled');
+    } catch {
+      // storage blocked in this test — nothing to clear
+    }
+  });
+
+  it('toggle OFF restores the EXACT original ML order after updateConfig re-ranks the DOM', () => {
+    const original = cardIds(); // ML's true served order, captured before mount
+
+    const reorderer = createReorderer(container);
+    const toggle = mountToggle(container, reorderer);
+
+    // ON -> ranked order (distinct from original).
+    toggle.on();
+    const onOrder = cardIds();
+    expect(onOrder).not.toEqual(original);
+
+    // Prefs-driven re-rank: a new config reorders the CURRENT (already ranked)
+    // DOM. Expected order is derived from the DOM state right before the change
+    // (rank originalIndex tie-break is input-order sensitive).
+    const expectedAfterUpdate = rank(parseCards(container), PRICE_HEAVY).map((c) => c.id);
+    expect(expectedAfterUpdate).not.toEqual(onOrder); // sanity: config change reorders
+    reorderer.updateConfig(PRICE_HEAVY);
+    expect(cardIds()).toEqual(expectedAfterUpdate);
+
+    // OFF must restore the EXACT original order — updateConfig never touched the
+    // toggle's snapshot, so restoreOriginal() replays ML's true served order.
+    toggle.off();
+    expect(cardIds()).toEqual(original);
+
+    toggle.destroy();
+  });
+
+  it('repeated prefs changes + ON/OFF cycles always restore the exact original order', () => {
+    const original = cardIds();
+    const reorderer = createReorderer(container);
+    const toggle = mountToggle(container, reorderer);
+
+    toggle.on();
+    reorderer.updateConfig(PRICE_HEAVY);
+    reorderer.updateConfig(RANK_CONFIG);
+    reorderer.updateConfig({ w1: 1.0, w2: 0.1, w3: 0.4, w4: 0.1, priorC: 5 });
+    toggle.off();
+    expect(cardIds()).toEqual(original);
+
+    // A second cycle after several config swaps still restores exactly.
+    toggle.on();
+    reorderer.updateConfig(PRICE_HEAVY);
+    toggle.off();
+    expect(cardIds()).toEqual(original);
+
+    toggle.destroy();
   });
 });
