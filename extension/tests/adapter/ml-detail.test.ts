@@ -1,14 +1,15 @@
 // PDP adapter tests (Pilar 2).
 //
-// Selectors are FROZEN against a CAPTURED live PDP fixture
-// (tests/fixtures/ml-pdp-ar.html — a real ML product page saved via browser
-// "Save Page As"). The fixture is the contract: selectors that do not resolve
-// against it are wrong by definition (mirrors tests/adapter/mercadolibre.test.ts
-// from Pilar 1).
+// Selectors are FROZEN against CAPTURED live PDP fixtures (tests/fixtures/
+// ml-pdp-mx.html and ml-pdp-ar.html — real ML product pages from two different
+// TLDs, saved via browser "Save Page As"). The fixtures are the contract:
+// selectors that do not resolve against them are wrong by definition (mirrors
+// tests/adapter/mercadolibre.test.ts from Pilar 1).
 //
 // Two layers are covered:
 //   1. Fixture-grounded extraction — the real `ui-review-capability` review
-//      markup (featured reviews rendered inline; rating as filled star SVGs).
+//      markup (featured reviews rendered inline; rating as filled star SVGs),
+//      asserted across BOTH the MX and AR captures.
 //   2. The fixed CONTRACT — extractDetail NEVER throws (empty/missing -> empty
 //      partial), productId parsed from the URL, hydration-first `#__NEXT_DATA__`
 //      path for Next.js-style pages, title/<h1>/<title> fallbacks.
@@ -26,32 +27,55 @@ function dom(html: string, url = 'https://articulo.mercadolibre.com.mx/MLM123456
 }
 
 // ---------------------------------------------------------------------------
-// Captured live PDP fixture (saved from a real ML MX product page). Parsed once.
+// Captured live PDP fixtures (real ML product pages from two TLDs). Each entry
+// pairs a fixture file with the values verified against that capture.
 // ---------------------------------------------------------------------------
 const here = dirname(fileURLToPath(import.meta.url));
-const fixturePath = resolve(here, '..', 'fixtures', 'ml-pdp-ar.html');
-const fixtureHtml = readFileSync(fixturePath, 'utf8');
-const fixtureUrl =
-  'https://www.mercadolibre.com.mx/auriculares-inalambricos-xiaomi-redmi-buds-6-play-negro/p/MLM39962085#reviews';
 
-describe('ml-detail adapter — fixture-grounded (ml-pdp-ar.html)', () => {
+const FIXTURES = [
+  {
+    label: 'ml-pdp-mx.html (MX)',
+    file: 'ml-pdp-mx.html',
+    url: 'https://www.mercadolibre.com.mx/audifonos-in-ear-inalambricos-1hora-auriculares-inalambricos-bluetooth-54-con-microfono-negro/p/MLM68725493#reviews',
+    productId: 'MLM68725493',
+    productTitle:
+      'Audífonos In-ear Inalámbricos 1hora Auriculares Inalambricos Bluetooth 5.4 Con Microfono (negro)',
+    reviewCount: 5,
+    firstReviewStartsWith: 'Aislamiento: funciona bien',
+    // index 3 is a 4-star review -> proves star counting handles ratings != 5.
+    fourStarIndex: 3,
+  },
+  {
+    label: 'ml-pdp-ar.html (AR)',
+    file: 'ml-pdp-ar.html',
+    url: 'https://www.mercadolibre.com.ar/auriculares-bluetooth-smart-premium-sonido-pro-deportes/up/MLAU3842095417?pdp_filters=item_id:MLA3065324782#reviews',
+    productId: 'MLAU3842095417',
+    productTitle: 'Auriculares Bluetooth Smart Premium Sonido Pro Deportes',
+    reviewCount: 5,
+    firstReviewStartsWith: 'Comodidad: excelente',
+    fourStarIndex: 2,
+  },
+] as const;
+
+describe.each(FIXTURES)('ml-detail adapter — fixture-grounded ($label)', (fx) => {
   let data: ReturnType<typeof extractDetail>;
 
   beforeAll(() => {
-    const doc = new JSDOM(fixtureHtml, { url: fixtureUrl }).window.document;
-    data = extractDetail(doc, fixtureUrl);
+    const html = readFileSync(resolve(here, '..', 'fixtures', fx.file), 'utf8');
+    const doc = new JSDOM(html, { url: fx.url }).window.document;
+    data = extractDetail(doc, fx.url);
   });
 
-  it('parses the product id from the /p/ URL', () => {
-    expect(data.productId).toBe('MLM39962085');
+  it('parses the product id from the URL', () => {
+    expect(data.productId).toBe(fx.productId);
   });
 
   it('parses the product title from .ui-pdp-title', () => {
-    expect(data.productTitle).toBe('Auriculares Inalámbricos Xiaomi Redmi Buds 6 Play Negro');
+    expect(data.productTitle).toBe(fx.productTitle);
   });
 
-  it('extracts exactly the 5 featured reviews rendered inline', () => {
-    expect(data.reviews).toHaveLength(5);
+  it('extracts exactly the featured reviews rendered inline', () => {
+    expect(data.reviews).toHaveLength(fx.reviewCount);
   });
 
   it('extracts the body text of each review (non-empty)', () => {
@@ -59,17 +83,16 @@ describe('ml-detail adapter — fixture-grounded (ml-pdp-ar.html)', () => {
       expect(typeof r.text).toBe('string');
       expect(r.text.length).toBeGreaterThan(0);
     }
-    expect(data.reviews[0].text.startsWith('Nashe god')).toBe(true);
+    expect(data.reviews[0].text.startsWith(fx.firstReviewStartsWith)).toBe(true);
   });
 
-  it('counts filled star SVGs into a 1..5 numeric rating', () => {
+  it('counts filled star SVGs into a 1..5 numeric rating (incl. a 4-star review)', () => {
     for (const r of data.reviews) {
       expect(r.rating).not.toBeNull();
       expect(r.rating!).toBeGreaterThanOrEqual(1);
       expect(r.rating!).toBeLessThanOrEqual(5);
     }
-    // The 5 featured reviews in this fixture are all 5-star.
-    expect(data.reviews[0].rating).toBe(5);
+    expect(data.reviews[fx.fourStarIndex].rating).toBe(4);
   });
 
   it('attaches NO date (ML\'s __date element holds the country, not a date)', () => {
