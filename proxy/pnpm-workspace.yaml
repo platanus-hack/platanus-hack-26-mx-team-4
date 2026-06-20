@@ -1,0 +1,5 @@
+# pnpm project settings (pnpm 11 reads settings from here). Mirrors the
+# extension workspace: approve esbuild's postinstall so vitest's transformer
+# binary is linked and `pnpm test` runs (otherwise ERR_PNPM_IGNORED_BUILDS).
+allowBuilds:
+  esbuild: true
