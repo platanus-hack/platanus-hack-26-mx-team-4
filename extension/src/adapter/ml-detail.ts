@@ -1,41 +1,38 @@
 // PDP adapter — the ONLY file that touches MercadoLibre product-detail-page
 // selectors (Pilar 2). Mirrors the Pilar 1 pattern: selectors live ONLY here.
 //
-// STATUS — SELECTORS NOT FROZEN (Batch 0 fixture precondition unmet):
-//   Live PDP fixtures could NOT be captured in this environment (MercadoLibre
-//   bot protection blocks server-side fetch; reviews are client-hydrated). Per
-//   the spec, NO ML class selector may be frozen until a human captures a real
-//   PDP via browser "Save Page As" into tests/fixtures/. Until then:
-//     - The DOM-fallback selector constants below are EMPTY and GUARDED (an
-//       empty selector is skipped, never passed to querySelector, which would
-//       throw a SyntaxError). So the fallback contributes nothing yet.
-//     - The hydration-JSON path uses a GENERIC Next.js `#__NEXT_DATA__` scan
-//       with a shape-based review finder. It is best-effort and MUST be
-//       confirmed/narrowed against the captured fixture (the exact review node
-//       path is fixture-dependent and intentionally not hard-coded here).
-//     - `hasMoreReviewsHint` returns false (TODO: wire to the fixture's "Ver
-//       más" control once selectors are known).
-//   The CONTRACT is fixed and tested: extractDetail NEVER throws and always
+// STATUS — SELECTORS FROZEN from a captured live PDP fixture
+// (tests/fixtures/ml-pdp-ar.html, a real ML PDP saved via browser "Save Page
+// As"). ML renders the featured reviews inline with the `ui-review-capability`
+// component (NOT Next.js — the page hydrates from `__NORDIC_RENDERING_CTX__`,
+// which the generic `#__NEXT_DATA__` scan intentionally ignores). So the
+// hydration path is a no-op here and extraction runs through the DOM path with
+// the frozen selectors below.
+//   - Reviews: `.ui-review-capability-comments__comment` items, body text in
+//     `__content`, rating rendered as filled star SVGs (`<use href="#poly_star_
+//     fill">`) which we COUNT to get the numeric rating.
+//   - The per-review `__date` element holds the reviewer COUNTRY, not a date,
+//     so REVIEW_DATE_SELECTOR is left empty (date stays optional/undefined
+//     rather than carrying garbage).
+//   - `hasMoreReviewsHint` is wired to the "Mostrar todas las opiniones"
+//     control (`.show-more-click`).
+//   The CONTRACT is unchanged and tested: extractDetail NEVER throws and always
 //   returns a ProductReviewData (empty partial when nothing is found).
-//
-// When the fixture arrives, a human fills the SELECTOR TBD constants and
-// narrows the hydration path; everything downstream (cache/proxy/UI) is already
-// wired against this contract.
 
 import type { ProductReviewData, ReviewText } from '../detail/types';
 
 // ---------------------------------------------------------------------------
-// SELECTOR TBD — fill from the captured live PDP fixture (tests/fixtures/
-// ml-pdp-*.html). Left empty so the DOM fallback is inert until grounded.
-// `querySelector('')` throws SyntaxError, so every consumer guards `isEmpty`.
+// Selectors FROZEN against the captured live PDP fixture (tests/fixtures/
+// ml-pdp-ar.html). Empty selectors are still guarded (`querySelector('')`
+// throws SyntaxError), so REVIEW_DATE_SELECTOR='' is safely skipped.
 // ---------------------------------------------------------------------------
-const REVIEW_CONTAINER_SELECTOR = ''; // TODO(Batch 0): reviews wrapper, e.g. '.ui-pdp-reviews'
-const REVIEW_ITEM_SELECTOR = ''; // TODO(Batch 0): one review, e.g. '.ui-pdp-review'
-const REVIEW_TEXT_SELECTOR = ''; // TODO(Batch 0): review body text
-const REVIEW_RATING_SELECTOR = ''; // TODO(Batch 0): star rating value
-const REVIEW_DATE_SELECTOR = ''; // TODO(Batch 0): review date
-const PRODUCT_TITLE_SELECTOR = ''; // TODO(Batch 0): PDP <h1> title
-const MORE_REVIEWS_HINT_SELECTOR = ''; // TODO(Batch 0): "Ver más" control
+const REVIEW_CONTAINER_SELECTOR = '.ui-review-capability-comments'; // reviews wrapper
+const REVIEW_ITEM_SELECTOR = '.ui-review-capability-comments__comment'; // one review (article)
+const REVIEW_TEXT_SELECTOR = '.ui-review-capability-comments__comment__content'; // review body text
+const REVIEW_RATING_SELECTOR = '.ui-review-capability-comments__comment__rating'; // star container (count fills)
+const REVIEW_DATE_SELECTOR = ''; // intentionally empty: ML's __date holds the country, not a date
+const PRODUCT_TITLE_SELECTOR = '.ui-pdp-title'; // PDP title
+const MORE_REVIEWS_HINT_SELECTOR = '.show-more-click'; // "Mostrar todas las opiniones" control
 
 /** True when a selector string is usable (non-empty). Guards querySelector. */
 function hasSelector(sel: string): boolean {
@@ -87,7 +84,6 @@ export function extractDetail(
         productId,
         productTitle,
         reviews: hydrated.reviews,
-        // Hint detection is selector-gated; with selectors TBD it stays false.
         hasMoreReviewsHint: detectMoreHint(doc),
       };
     }
@@ -251,8 +247,16 @@ function extractReviewsFromDom(doc: Document): ReviewText[] {
 
 function parseRatingFromEl(item: Element): number | null {
   const el = safeQuery<HTMLElement>(item, REVIEW_RATING_SELECTOR);
-  if (!el?.textContent) return null;
-  const n = parseFloat(el.textContent.replace(',', '.'));
+  if (!el) return null;
+  // ML renders the per-review rating as filled/empty star SVGs; a filled star
+  // is a `<use href="#poly_star_fill">`. Count the filled ones to get 0..5.
+  const stars = el.querySelectorAll('use');
+  if (stars.length > 0) {
+    const filled = Array.from(stars).filter((u) => /fill/i.test(u.getAttribute('href') ?? '')).length;
+    return filled > 0 ? filled : null;
+  }
+  // Fallback for any layout that exposes a numeric rating as text instead.
+  const n = parseFloat((el.textContent ?? '').replace(',', '.'));
   return Number.isFinite(n) ? n : null;
 }
 
@@ -267,15 +271,15 @@ function textOf(el: Element | null): string {
 }
 
 /**
- * Detect a "Ver más" / load-more reviews control. TODO: wire to the fixture's
- * real control selector. With MORE_REVIEWS_HINT_SELECTOR TBD this is a text
- * heuristic that returns false unless a clearly-labelled control is present.
+ * Detect a "Mostrar todas las opiniones" / load-more reviews control. Wired to
+ * the frozen `.show-more-click` selector from the fixture; the text heuristic is
+ * kept only as a defensive fallback for layouts without that class.
  */
 function detectMoreHint(doc: Document): boolean {
   if (hasSelector(MORE_REVIEWS_HINT_SELECTOR)) {
     return safeQuery<HTMLElement>(doc, MORE_REVIEWS_HINT_SELECTOR) !== null;
   }
-  // Provisional text heuristic — confirm/replace against the fixture.
+  // Defensive text heuristic for layouts that lack the frozen control class.
   try {
     const candidates = Array.from(doc.querySelectorAll('button, a'));
     return candidates.some((el) => /ver\s+m[aá]s\s+opin/i.test(el.textContent ?? ''));

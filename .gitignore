@@ -1,5 +1,6 @@
 # Local tooling / agent artifacts
 .atl/
 
-# Saved-page assets — not needed for tests (ml-search.html is committed)
+# Saved-page assets — not needed for tests (only the .html fixtures are committed)
 extension/tests/fixtures/ml-search_files/
+extension/tests/fixtures/*_files/

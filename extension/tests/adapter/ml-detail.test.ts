@@ -1,21 +1,23 @@
 // PDP adapter tests (Pilar 2).
 //
-// IMPORTANT: these tests use SYNTHETIC minimal HTML, NOT a captured live PDP
-// fixture. Live PDP capture is BLOCKED (ML bot protection; Batch 0 pending a
-// human "Save Page As"). Per the spec, NO ML class selector may be frozen
-// until a fixture exists, so these tests assert ONLY the fixed CONTRACT:
-//   - extractDetail NEVER throws (empty/missing/lazy -> empty partial).
-//   - productId is parsed from the URL (/MLM?\d+/).
-//   - hydration-JSON-first path harvests review-shaped objects from
-//     #__NEXT_DATA__ (generic, to be confirmed against the fixture).
-//   - the DOM fallback is inert while selector constants are empty (TBD).
-//   - hasMoreReviewsHint is false while the hint selector is TBD.
+// Selectors are FROZEN against a CAPTURED live PDP fixture
+// (tests/fixtures/ml-pdp-ar.html — a real ML product page saved via browser
+// "Save Page As"). The fixture is the contract: selectors that do not resolve
+// against it are wrong by definition (mirrors tests/adapter/mercadolibre.test.ts
+// from Pilar 1).
 //
-// When the real fixture lands, replace the synthetic DOMs with fixture-grounded
-// assertions on the actual review container/item selectors.
+// Two layers are covered:
+//   1. Fixture-grounded extraction — the real `ui-review-capability` review
+//      markup (featured reviews rendered inline; rating as filled star SVGs).
+//   2. The fixed CONTRACT — extractDetail NEVER throws (empty/missing -> empty
+//      partial), productId parsed from the URL, hydration-first `#__NEXT_DATA__`
+//      path for Next.js-style pages, title/<h1>/<title> fallbacks.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { extractDetail } from '../../src/adapter/ml-detail';
 
 function dom(html: string, url = 'https://articulo.mercadolibre.com.mx/MLM123456789-titulo-falso'): Document {
@@ -23,7 +25,63 @@ function dom(html: string, url = 'https://articulo.mercadolibre.com.mx/MLM123456
   return new JSDOM(html, { url }).window.document;
 }
 
-describe('ml-detail adapter — fixed contract (selectors TBD)', () => {
+// ---------------------------------------------------------------------------
+// Captured live PDP fixture (saved from a real ML MX product page). Parsed once.
+// ---------------------------------------------------------------------------
+const here = dirname(fileURLToPath(import.meta.url));
+const fixturePath = resolve(here, '..', 'fixtures', 'ml-pdp-ar.html');
+const fixtureHtml = readFileSync(fixturePath, 'utf8');
+const fixtureUrl =
+  'https://www.mercadolibre.com.mx/auriculares-inalambricos-xiaomi-redmi-buds-6-play-negro/p/MLM39962085#reviews';
+
+describe('ml-detail adapter — fixture-grounded (ml-pdp-ar.html)', () => {
+  let data: ReturnType<typeof extractDetail>;
+
+  beforeAll(() => {
+    const doc = new JSDOM(fixtureHtml, { url: fixtureUrl }).window.document;
+    data = extractDetail(doc, fixtureUrl);
+  });
+
+  it('parses the product id from the /p/ URL', () => {
+    expect(data.productId).toBe('MLM39962085');
+  });
+
+  it('parses the product title from .ui-pdp-title', () => {
+    expect(data.productTitle).toBe('Auriculares Inalámbricos Xiaomi Redmi Buds 6 Play Negro');
+  });
+
+  it('extracts exactly the 5 featured reviews rendered inline', () => {
+    expect(data.reviews).toHaveLength(5);
+  });
+
+  it('extracts the body text of each review (non-empty)', () => {
+    for (const r of data.reviews) {
+      expect(typeof r.text).toBe('string');
+      expect(r.text.length).toBeGreaterThan(0);
+    }
+    expect(data.reviews[0].text.startsWith('Nashe god')).toBe(true);
+  });
+
+  it('counts filled star SVGs into a 1..5 numeric rating', () => {
+    for (const r of data.reviews) {
+      expect(r.rating).not.toBeNull();
+      expect(r.rating!).toBeGreaterThanOrEqual(1);
+      expect(r.rating!).toBeLessThanOrEqual(5);
+    }
+    // The 5 featured reviews in this fixture are all 5-star.
+    expect(data.reviews[0].rating).toBe(5);
+  });
+
+  it('attaches NO date (ML\'s __date element holds the country, not a date)', () => {
+    for (const r of data.reviews) expect(r.date).toBeUndefined();
+  });
+
+  it('detects the "Mostrar todas las opiniones" control (hasMoreReviewsHint)', () => {
+    expect(data.hasMoreReviewsHint).toBe(true);
+  });
+});
+
+describe('ml-detail adapter — fixed contract', () => {
   describe('never throws + empty fallback', () => {
     it('returns an empty partial on a blank document (never throws)', () => {
       const doc = dom('<!DOCTYPE html><html><body></body></html>');
@@ -70,7 +128,7 @@ describe('ml-detail adapter — fixed contract (selectors TBD)', () => {
   });
 
   describe('productTitle', () => {
-    it('uses the <h1> when no dedicated title selector is frozen yet', () => {
+    it('uses the <h1> when no .ui-pdp-title is present', () => {
       const doc = dom('<html><body><h1>Auriculares Bluetooth</h1></body></html>');
       expect(extractDetail(doc).productTitle).toBe('Auriculares Bluetooth');
     });
@@ -130,25 +188,45 @@ describe('ml-detail adapter — fixed contract (selectors TBD)', () => {
     });
   });
 
-  describe('DOM fallback is inert while selectors are TBD (empty)', () => {
-    it('does not extract reviews from arbitrary DOM (no frozen selector)', () => {
-      // A page with review-looking markup but NO frozen selector should yield
-      // zero reviews until selectors are filled from a fixture.
+  describe('DOM extraction is selector-scoped (frozen selectors)', () => {
+    it('does not extract reviews from arbitrary review-looking markup', () => {
+      // Markup with generic class names (not the frozen ui-review-capability
+      // selectors) must yield zero reviews.
       const doc = dom(
         '<html><body><div class="some-reviews"><div class="review"><p>Muy bueno</p></div></div></body></html>',
       );
       expect(extractDetail(doc).reviews).toEqual([]);
     });
+
+    it('extracts a review from the frozen ui-review-capability markup', () => {
+      const doc = dom(
+        '<html><body><div class="ui-review-capability-comments">' +
+          '<article class="ui-review-capability-comments__comment">' +
+          '<div class="ui-review-capability-comments__comment__rating">' +
+          '<svg class="ui-review-capability-comments__comment__rating__star"><use href="#poly_star_fill"></use></svg>' +
+          '<svg class="ui-review-capability-comments__comment__rating__star"><use href="#poly_star_fill"></use></svg>' +
+          '<svg class="ui-review-capability-comments__comment__rating__star"><use href="#poly_star_fill"></use></svg>' +
+          '<svg class="ui-review-capability-comments__comment__rating__star"><use href="#poly_star_empty"></use></svg>' +
+          '<svg class="ui-review-capability-comments__comment__rating__star"><use href="#poly_star_empty"></use></svg>' +
+          '</div>' +
+          '<p class="ui-review-capability-comments__comment__content">Buen producto</p>' +
+          '</article></div></body></html>',
+      );
+      const reviews = extractDetail(doc).reviews;
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0].text).toBe('Buen producto');
+      expect(reviews[0].rating).toBe(3);
+    });
   });
 
-  describe('hasMoreReviewsHint (provisional)', () => {
-    it('is false on a page with no "ver más opiniones" control', () => {
+  describe('hasMoreReviewsHint (frozen .show-more-click control)', () => {
+    it('is false on a page with no review control', () => {
       const doc = dom('<html><body><h1>x</h1></body></html>');
       expect(extractDetail(doc).hasMoreReviewsHint).toBe(false);
     });
 
-    it('is true when a button labelled "ver más opiniones" exists (text heuristic)', () => {
-      const doc = dom('<html><body><button>Ver más opiniones</button></body></html>');
+    it('is true when the "Mostrar todas las opiniones" control (.show-more-click) exists', () => {
+      const doc = dom('<html><body><button class="show-more-click">Mostrar todas las opiniones</button></body></html>');
       expect(extractDetail(doc).hasMoreReviewsHint).toBe(true);
     });
   });
