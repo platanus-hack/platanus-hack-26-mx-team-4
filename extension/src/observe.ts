@@ -19,7 +19,9 @@
 
 import { parseCards } from './adapter/mercadolibre';
 import { rank } from './ranking/score';
+import type { RankConfig } from './ranking/types';
 import { RANK_CONFIG } from './config';
+import { normalizePrefs } from './prefs/rankingPrefs';
 
 /** Attribute stamped on every card row once it has been moved by the reorderer. */
 const RERANK_ATTR = 'data-ml-reranked';
@@ -37,6 +39,15 @@ export interface RerankController {
   stop(): void;
   /** Stop watching and mark the controller as destroyed (further calls no-op). */
   destroy(): void;
+  /**
+   * Replace the active ranking config and re-rank the CURRENT DOM with it,
+   * reusing the existing parse -> rank -> re-append pipeline. ZERO network
+   * calls (Pilar 1 invariant). Does NOT start or stop the observer — the
+   * toggle owns the observe lifecycle; this only re-derives the order of the
+   * cards already in the container. `next` is normalized (missing/invalid
+   * fields merged from defaults, negatives clamped to 0) before use.
+   */
+  updateConfig(next: RankConfig): void;
 }
 
 /**
@@ -44,12 +55,22 @@ export interface RerankController {
  * `start()` (or let the toggle do it) to react to live DOM changes. The
  * content script creates this and hands it to the toggle, which gates
  * `start()`/`stop()` on the ON/OFF state per design section 7.
+ *
+ * `initialConfig` (default `RANK_CONFIG`) sets the active weights for the first
+ * `reorder()`; `updateConfig(next)` swaps them later and re-ranks in place.
  */
-export function createReorderer(container: HTMLElement): RerankController {
+export function createReorderer(
+  container: HTMLElement,
+  initialConfig: RankConfig = RANK_CONFIG,
+): RerankController {
   let observer: MutationObserver | null = null;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let isReordering = false;
   let destroyed = false;
+  // Normalize once on construction so a partial/invalid initial config is just
+  // as safe as a later updateConfig. RANK_CONFIG normalizes to itself, so the
+  // default path is unchanged (backward compatible with existing importers).
+  let currentConfig: RankConfig = normalizePrefs(initialConfig);
 
   function reorder(): void {
     if (destroyed || isReordering) return;
@@ -59,7 +80,7 @@ export function createReorderer(container: HTMLElement): RerankController {
 
     // `cards` is in current DOM order (querySelectorAll is document order);
     // `ranked` is the same nodes in descending quality order.
-    const ranked = rank(cards, RANK_CONFIG);
+    const ranked = rank(cards, currentConfig);
     const rankedNodes = ranked.map((c) => c.nodeRef);
     const currentNodes = cards.map((c) => c.nodeRef);
 
@@ -132,7 +153,19 @@ export function createReorderer(container: HTMLElement): RerankController {
     destroyed = true;
   }
 
-  return { reorder, start, stop, destroy };
+  /**
+   * Swap the active config (normalized) and re-rank the current DOM with it.
+   * Reuses `reorder()`, so it inherits idempotency and zero-network behavior.
+   * Does NOT touch the observer — the toggle owns start/stop (design: runtime
+   * updates via a mutable config, not a recreated observer).
+   */
+  function updateConfig(next: RankConfig): void {
+    if (destroyed) return;
+    currentConfig = normalizePrefs(next);
+    reorder();
+  }
+
+  return { reorder, start, stop, destroy, updateConfig };
 }
 
 /**
