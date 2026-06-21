@@ -15,6 +15,7 @@ import {
   looksLikeHeadphones,
   buildSearchUrl,
   parseSearchResults,
+  parseSearchApiResults,
   parseReviewPage,
   decodeEntities,
   fetchAnalysis,
@@ -42,6 +43,14 @@ describe('normalizeText / significantTokens', () => {
       'go',
       'air',
       'pop',
+    ]);
+  });
+  it('drops MercadoLibre seller boilerplate that is not part of the model', () => {
+    expect(significantTokens('Apple AirPods Pro 3 Color Blanco Con CancelaciÃ³n De Ruido Distribuidor Autorizado')).toEqual([
+      'apple',
+      'airpods',
+      'pro',
+      '3',
     ]);
   });
 });
@@ -100,6 +109,40 @@ describe('parseSearchResults', () => {
   });
 });
 
+describe('parseSearchApiResults', () => {
+  it('collects review candidates from RTINGS internal search API JSON', () => {
+    const out = parseSearchApiResults({
+      data: {
+        search_results: {
+          results: [
+            {
+              title: 'Bose QuietComfort Ultra Earbuds Truly Wireless Headphones Review',
+              url: '/headphones/reviews/bose/quietcomfort-ultra-earbuds-truly-wireless',
+              page_type: 'review',
+            },
+            {
+              title: 'The 7 Best AirPods Alternatives',
+              url: '/headphones/reviews/best/airpods-alternatives',
+              page_type: 'recommendation',
+            },
+            {
+              title: 'Dell U2720Q Monitor Review',
+              url: '/monitor/reviews/dell/u2720q',
+              page_type: 'review',
+            },
+          ],
+        },
+      },
+    });
+    expect(out).toEqual([
+      {
+        url: 'https://www.rtings.com/headphones/reviews/bose/quietcomfort-ultra-earbuds-truly-wireless',
+        title: 'Bose QuietComfort Ultra Earbuds Truly Wireless Headphones Review',
+      },
+    ]);
+  });
+});
+
 describe('parseReviewPage — real fixture', () => {
   const analysis = parseReviewPage(REVIEW_HTML);
 
@@ -146,6 +189,16 @@ describe('fetchAnalysis — orchestration (mocked fetch)', () => {
     }) as unknown as typeof fetch;
   }
 
+  function searchApiBody(results: Array<{ title: string; url: string; page_type?: string }>): string {
+    return JSON.stringify({
+      data: {
+        search_results: {
+          results: results.map((r) => ({ page_type: 'review', ...r })),
+        },
+      },
+    });
+  }
+
   const SEARCH_HTML =
     '<a href="/headphones/reviews/jlab-audio/go-air-pop-true-wireless">JLab Audio GO Air POP True Wireless</a>';
 
@@ -169,6 +222,27 @@ describe('fetchAnalysis — orchestration (mocked fetch)', () => {
     expect(out.productMatched).toBe(true);
     expect(out.reviews[0].rating).toBe(3.8);
     expect(out.matchConfidence).toBeGreaterThanOrEqual(RTINGS_MATCH_THRESHOLD);
+  });
+
+  it('uses RTINGS internal search API results when the Vue search HTML has no anchors', async () => {
+    const fetchImpl = mockFetch({
+      '/api/v2/safe/app/search__search_results': searchApiBody([
+        {
+          title: 'Bose QuietComfort Ultra Earbuds (2nd Gen) Headphones Review',
+          url: '/headphones/reviews/bose/quietcomfort-ultra-earbuds-2nd-gen',
+        },
+        {
+          title: 'Bose QuietComfort Ultra Earbuds Truly Wireless Headphones Review',
+          url: '/headphones/reviews/bose/quietcomfort-ultra-earbuds-truly-wireless',
+        },
+      ]),
+      'quietcomfort-ultra-earbuds-truly-wireless': REVIEW_HTML,
+    });
+    const out = await fetchAnalysis({ title: 'Auriculares Bose QuietComfort Ultra Earbuds Negro' }, fetchImpl);
+    expect(out.productMatched).toBe(true);
+    expect(out.sourceUrl).toBe(
+      'https://www.rtings.com/headphones/reviews/bose/quietcomfort-ultra-earbuds-truly-wireless',
+    );
   });
 
   it('falls back (no match) when the best candidate is below the threshold', async () => {

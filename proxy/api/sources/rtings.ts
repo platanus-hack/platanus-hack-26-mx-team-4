@@ -75,9 +75,12 @@ const STOPWORDS = new Set([
   'headphones', 'headphone', 'earbuds', 'earbud', 'earphones', 'earphone',
   'audifonos', 'auriculares', 'audifono', 'auricular', 'audio',
   // connectivity / marketing
-  'true', 'wireless', 'inalambrico', 'inalambricos', 'inalambrica', 'inalambricas',
+  'true', 'truly', 'wireless', 'inalambrico', 'inalambricos', 'inalambrica', 'inalambricas',
   'bluetooth', 'with', 'con', 'de', 'para', 'the', 'and', 'y',
   'review', 'original', 'nuevo', 'nueva',
+  // MercadoLibre seller / listing boilerplate
+  'color', 'cancelacion', 'cancelacia', 'cancellation', 'ruido', 'noise', 'distribuidor',
+  'autorizado', 'authorized', 'oficial', 'official', 'tienda',
   // colors (es/en)
   'negro', 'negra', 'blanco', 'blanca', 'azul', 'rojo', 'roja', 'verde',
   'gris', 'rosa', 'rosado', 'morado', 'violeta', 'amarillo', 'dorado', 'plata',
@@ -105,7 +108,7 @@ export function normalizeText(s: string): string {
 export function significantTokens(s: string): string[] {
   return normalizeText(s)
     .split(' ')
-    .filter((t) => t.length > 1 && !STOPWORDS.has(t));
+    .filter((t) => (t.length > 1 || /^\d$/.test(t)) && !STOPWORDS.has(t));
 }
 
 /** Build the brand+model+title token bag for a query. */
@@ -149,6 +152,15 @@ export function buildSearchUrl(query: ProductQuery): string {
 /** A RTINGS search candidate: a review URL + its visible title. */
 export type SearchCandidate = { url: string; title: string };
 
+/** RTINGS internal search API endpoint used by the current Vue search page. */
+const RTINGS_SEARCH_API = `${RTINGS_ORIGIN}/api/v2/safe/app/search__search_results`;
+
+type SearchApiResult = {
+  title?: unknown;
+  url?: unknown;
+  page_type?: unknown;
+};
+
 /**
  * Parse headphones review candidates from a RTINGS search results page. Best
  * effort + defensive: collects anchors whose href points at a headphones review
@@ -171,6 +183,32 @@ export function parseSearchResults(html: string, baseOrigin: string = RTINGS_ORI
     if (seen.has(url)) continue;
     seen.add(url);
     out.push({ url, title });
+  }
+  return out;
+}
+
+/**
+ * Parse candidates from RTINGS' current internal search API response.
+ * The public `/search` page is Vue-rendered, so results no longer appear as
+ * plain anchors in the HTML. This keeps the old HTML parser as a fallback but
+ * makes the adapter work with the real production search path.
+ */
+export function parseSearchApiResults(json: unknown, baseOrigin: string = RTINGS_ORIGIN): SearchCandidate[] {
+  const results = (((json as Record<string, unknown> | null)?.data as Record<string, unknown> | undefined)
+    ?.search_results as Record<string, unknown> | undefined)?.results;
+  if (!Array.isArray(results)) return [];
+
+  const out: SearchCandidate[] = [];
+  const seen = new Set<string>();
+  for (const raw of results as SearchApiResult[]) {
+    if (raw == null || typeof raw !== 'object') continue;
+    if (raw.page_type !== 'review') continue;
+    if (typeof raw.url !== 'string' || typeof raw.title !== 'string') continue;
+    if (!raw.url.includes(HEADPHONES_PATH)) continue;
+    const url = raw.url.startsWith('http') ? raw.url : baseOrigin + raw.url;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push({ url, title: decodeEntities(stripTags(raw.title)) });
   }
   return out;
 }
@@ -337,6 +375,37 @@ async function getText(url: string, fetchImpl: typeof fetch): Promise<string | n
   }
 }
 
+async function getSearchApiCandidates(query: ProductQuery, fetchImpl: typeof fetch): Promise<SearchCandidate[]> {
+  try {
+    const variables = {
+      query: [query.brand, query.model].filter(Boolean).join(' ').trim() || query.title || '',
+      type: 'full',
+      is_admin: false,
+      count: 20,
+      silo_url_part: ['headphones'],
+      offset: 0,
+      page_type: ['review'],
+      brand: null,
+      release_year: null,
+      methodology: null,
+    };
+    const res = await fetchImpl(RTINGS_SEARCH_API, {
+      method: 'POST',
+      headers: {
+        'User-Agent': RTINGS_UA,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Referer: buildSearchUrl(query),
+      },
+      body: JSON.stringify({ variables }),
+    });
+    if (!res.ok) return [];
+    return parseSearchApiResults(await res.json());
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Look a product up on RTINGS and return a NormalizedAnalysis. Flow:
  *   scope gate (headphones?) -> search -> pick best candidate by confidence ->
@@ -352,10 +421,12 @@ export async function fetchAnalysis(
   // never triggers a RTINGS lookup (avoids surfacing an unrelated analysis).
   if (!looksLikeHeadphones(query)) return noMatch();
 
-  const searchHtml = await getText(buildSearchUrl(query), fetchImpl);
-  if (!searchHtml) return noMatch();
-
-  const candidates = parseSearchResults(searchHtml);
+  let candidates = await getSearchApiCandidates(query, fetchImpl);
+  if (candidates.length === 0) {
+    const searchHtml = await getText(buildSearchUrl(query), fetchImpl);
+    if (!searchHtml) return noMatch();
+    candidates = parseSearchResults(searchHtml);
+  }
   if (candidates.length === 0) return noMatch();
 
   // Pick the highest-confidence candidate.
