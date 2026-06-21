@@ -74,7 +74,7 @@ describe('toProxyRequest', () => {
       reviews: REVIEWS,
       hasMoreReviewsHint: true,
     });
-    expect(req).toEqual({ productId: 'MLM1', productTitle: 'X', locale: 'es-MX', reviews: REVIEWS });
+    expect(req).toEqual({ source: 'ml-internal', productId: 'MLM1', productTitle: 'X', locale: 'es-MX', reviews: REVIEWS });
     expect(req).not.toHaveProperty('hasMoreReviewsHint');
   });
 

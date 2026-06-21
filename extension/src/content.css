@@ -167,6 +167,78 @@
   cursor: not-allowed;
 }
 
+/* Source selector (segmented pills / dropdown). */
+.ml-summary-card__sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.ml-summary-card__source-pill {
+  padding: 4px 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 999px;
+  background: #f7f7f7;
+  color: #444;
+  font: 600 12px/1.2 inherit;
+  cursor: pointer;
+}
+
+.ml-summary-card__source-pill:hover {
+  background: #ececec;
+}
+
+.ml-summary-card__source-pill[aria-pressed='true'] {
+  background: #3483fa;
+  border-color: #3483fa;
+  color: #fff;
+}
+
+.ml-summary-card__source-select {
+  padding: 5px 8px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  background: #fff;
+  color: #2b2b2b;
+  font: 600 12px/1.2 inherit;
+  cursor: pointer;
+}
+
+/* "Sin datos" fallback switch button. */
+.ml-summary-card__switch {
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #3483fa;
+  color: #fff;
+  font: 600 13px/1 inherit;
+  cursor: pointer;
+}
+
+.ml-summary-card__switch:hover {
+  background: #2968c8;
+}
+
+/* External-source attribution footer. */
+.ml-summary-card__attribution {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #eee;
+  font-size: 12px;
+  color: #777;
+}
+
+.ml-summary-card__attribution a {
+  color: #3483fa;
+  text-decoration: none;
+}
+
+.ml-summary-card__attribution a:hover {
+  text-decoration: underline;
+}
+
 /* Result sections. */
 .ml-summary-card__section {
   margin-bottom: 12px;

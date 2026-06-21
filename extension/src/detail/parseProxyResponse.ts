@@ -66,7 +66,28 @@ export function parseProxyResponse(value: unknown): ParseResult {
     return malformed('La respuesta del proxy no incluye un veredicto.');
   }
 
-  return { ok: true, data: { strongPoints, weakPoints, verdict } };
+  // Carry optional source provenance through (external sources attach it). It is
+  // UI-only metadata, so a malformed sourceMeta is dropped rather than rejected.
+  const data: ProxyResponse = { strongPoints, weakPoints, verdict };
+  const sourceMeta = parseSourceMeta(r.sourceMeta);
+  if (sourceMeta) data.sourceMeta = sourceMeta;
+
+  return { ok: true, data };
+}
+
+/** Defensively read the optional sourceMeta (UI provenance); null if unusable. */
+function parseSourceMeta(value: unknown): ProxyResponse['sourceMeta'] | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const m = value as Record<string, unknown>;
+  if (typeof m.sourceId !== 'string' || typeof m.label !== 'string') return null;
+  if (typeof m.matched !== 'boolean') return null;
+  const meta: NonNullable<ProxyResponse['sourceMeta']> = {
+    sourceId: m.sourceId,
+    label: m.label,
+    matched: m.matched,
+  };
+  if (typeof m.url === 'string' && m.url) meta.url = m.url;
+  return meta;
 }
 
 function malformed(message: string): { ok: false; error: SummaryError } {

@@ -16,11 +16,13 @@
 // failure MUST NEVER break the summary — it degrades to "no cache" on read and
 // silently no-ops on write, so the pipeline still fetches and renders.
 
-import type { CacheEntry, ProxyResponse, ReviewText } from './types';
+import type { CacheEntry, ProxyResponse, ReviewText, SourceId } from './types';
 import { isProxyResponse } from './parseProxyResponse';
 
 /** Cache key prefix. Bump `v1` to invalidate every cached summary at once. */
 const KEY_PREFIX = 'ml-summary:v1:';
+/** Default source so existing ml-internal callers/keys are unchanged. */
+const DEFAULT_SOURCE: SourceId = 'ml-internal';
 /** Freshness window. 7 days in milliseconds. */
 export const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -51,9 +53,16 @@ function fnv1a(s: string): string {
   return (h >>> 0).toString(36);
 }
 
-/** Build the storage key for a product id + review fingerprint. */
-export function cacheKey(productId: string, fingerprint: string): string {
-  return KEY_PREFIX + productId + ':' + fingerprint;
+/**
+ * Build the storage key for a source + product id + review fingerprint. The
+ * default source (`ml-internal`) keeps the ORIGINAL key format
+ * (`ml-summary:v1:<productId>:<fp>`) for back-compat; any other source is
+ * namespaced (`ml-summary:v1:<sourceId>:<productId>:<fp>`) so each source caches
+ * independently and switching sources never collides.
+ */
+export function cacheKey(productId: string, fingerprint: string, sourceId: SourceId = DEFAULT_SOURCE): string {
+  const prefix = sourceId === DEFAULT_SOURCE ? KEY_PREFIX : KEY_PREFIX + sourceId + ':';
+  return prefix + productId + ':' + fingerprint;
 }
 
 /**
@@ -67,10 +76,10 @@ export function cacheKey(productId: string, fingerprint: string): string {
  * Returns the full CacheEntry (timestamp + ttl + data) so callers/tests can
  * inspect freshness; the pipeline renders `entry.data`.
  */
-export function readCache(productId: string, fingerprint: string): CacheEntry | null {
+export function readCache(productId: string, fingerprint: string, sourceId: SourceId = DEFAULT_SOURCE): CacheEntry | null {
   let raw: string | null;
   try {
-    raw = localStorage.getItem(cacheKey(productId, fingerprint));
+    raw = localStorage.getItem(cacheKey(productId, fingerprint, sourceId));
   } catch {
     // Opaque origin / privacy mode / disabled storage -> no cache available.
     return null;
@@ -82,18 +91,18 @@ export function readCache(productId: string, fingerprint: string): CacheEntry | 
     entry = JSON.parse(raw) as CacheEntry;
   } catch {
     // Corrupt JSON (older schema, partial write) -> treat as a miss and clean up.
-    safeRemove(productId, fingerprint);
+    safeRemove(productId, fingerprint, sourceId);
     return null;
   }
 
   if (!isCacheEntry(entry)) {
-    safeRemove(productId, fingerprint);
+    safeRemove(productId, fingerprint, sourceId);
     return null;
   }
 
   // Freshness: now must be within [timestamp, timestamp + ttlMs].
   if (Date.now() > entry.timestamp + entry.ttlMs) {
-    safeRemove(productId, fingerprint);
+    safeRemove(productId, fingerprint, sourceId);
     return null;
   }
   return entry;
@@ -110,20 +119,25 @@ export function readCache(productId: string, fingerprint: string): CacheEntry | 
  * review-count per product) and grows localStorage unbounded; sweeping keeps a
  * single live entry per product (the newest review set).
  */
-export function writeCache(productId: string, fingerprint: string, data: ProxyResponse): void {
+export function writeCache(
+  productId: string,
+  fingerprint: string,
+  data: ProxyResponse,
+  sourceId: SourceId = DEFAULT_SOURCE,
+): void {
   const entry: CacheEntry = {
     timestamp: Date.now(),
     ttlMs: CACHE_TTL_MS,
     data,
   };
-  const key = cacheKey(productId, fingerprint);
+  const key = cacheKey(productId, fingerprint, sourceId);
   try {
     // Write FIRST, then sweep siblings. If setItem throws (quota), the prior
     // sibling entry is left intact instead of being swept away while the new
     // entry never lands — otherwise a failed write would leave the product with
     // ZERO cache. The sweep runs only after a successful write.
     localStorage.setItem(key, JSON.stringify(entry));
-    sweepProductKeys(productId, key);
+    sweepProductKeys(productId, key, sourceId);
   } catch {
     // localStorage unavailable -> degrade gracefully (no cache for this view).
   }
@@ -134,8 +148,12 @@ export function writeCache(productId: string, fingerprint: string, data: ProxyRe
  * being written). Safe when storage is unavailable or empty. The trailing `:`
  * in the prefix prevents cross-product prefix attacks (`MLM1` vs `MLM10`).
  */
-function sweepProductKeys(productId: string, keepKey: string): void {
-  const prefix = KEY_PREFIX + productId + ':';
+function sweepProductKeys(productId: string, keepKey: string, sourceId: SourceId = DEFAULT_SOURCE): void {
+  // Sweep only THIS source's sibling keys (the prefix mirrors cacheKey's scheme:
+  // bare for ml-internal, source-namespaced otherwise), so switching sources
+  // does not evict the other source's cached summary.
+  const prefix =
+    sourceId === DEFAULT_SOURCE ? KEY_PREFIX + productId + ':' : KEY_PREFIX + sourceId + ':' + productId + ':';
   let keys: string[];
   try {
     keys = Object.keys(localStorage);
@@ -154,14 +172,14 @@ function sweepProductKeys(productId: string, keepKey: string): void {
 }
 
 /** Remove the cached summary for `productId` + `fingerprint`. Safe when absent / unavailable. */
-export function clearCache(productId: string, fingerprint: string): void {
-  safeRemove(productId, fingerprint);
+export function clearCache(productId: string, fingerprint: string, sourceId: SourceId = DEFAULT_SOURCE): void {
+  safeRemove(productId, fingerprint, sourceId);
 }
 
 /** Remove a key, swallowing any storage failure. */
-function safeRemove(productId: string, fingerprint: string): void {
+function safeRemove(productId: string, fingerprint: string, sourceId: SourceId = DEFAULT_SOURCE): void {
   try {
-    localStorage.removeItem(cacheKey(productId, fingerprint));
+    localStorage.removeItem(cacheKey(productId, fingerprint, sourceId));
   } catch {
     // storage blocked — nothing to remove
   }

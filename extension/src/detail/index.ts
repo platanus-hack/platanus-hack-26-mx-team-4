@@ -18,7 +18,16 @@ import { extractDetail } from '../adapter/ml-detail';
 import { readCache, writeCache, reviewsFingerprint } from './cache';
 import { fetchSummary } from './proxyClient';
 import { createSummaryView, type SummaryView } from './summaryUI';
-import type { ProductReviewData, ProxyRequest } from './types';
+import { UI_SOURCES, DEFAULT_SOURCE, isExternalSource, getUiSource } from './sources/registry';
+import type { ProductReviewData, ProxyRequest, SourceId } from './types';
+
+/**
+ * Cache fingerprint for an EXTERNAL source. The extension has no review set to
+ * fingerprint (the proxy fetches the source), so external summaries are cached
+ * per source + product with a constant fingerprint; the 7-day TTL handles
+ * staleness. (ml-internal keeps fingerprinting its extracted reviews.)
+ */
+const EXTERNAL_FINGERPRINT = 'ext';
 
 /** MutationObserver debounce window (ms) — matches Pilar 1. */
 const DEBOUNCE_MS = 250;
@@ -64,19 +73,42 @@ export interface RunDetailOptions {
   maxTotalEmptyAttempts?: number;
   /** Absolute observation ceiling in ms, even WITH a hint (default 60000). */
   absoluteObserveTimeoutMs?: number;
+  /** Initial analysis source (default DEFAULT_SOURCE = ml-internal). */
+  source?: SourceId;
 }
 
 export interface DetailSummaryController {
   /** Stop observing, remove the card, clear timers. */
   destroy(): void;
+  /** Switch the active source and re-run the pipeline for it (live toggle). */
+  setSource(source: SourceId): void;
+  /** The currently selected source. */
+  readonly currentSource: SourceId;
 }
 
-/** Drop the UI-only hint flag and form the public ProxyRequest. */
+/** Drop the UI-only hint flag and form the ml-internal ProxyRequest. */
 export function toProxyRequest(data: ProductReviewData): ProxyRequest {
   const req: ProxyRequest = {
+    source: 'ml-internal',
     productId: data.productId,
     productTitle: data.productTitle,
     reviews: data.reviews,
+  };
+  if (data.locale) req.locale = data.locale;
+  return req;
+}
+
+/**
+ * Form an EXTERNAL-source ProxyRequest (e.g. RTINGS). Carries a productQuery
+ * (title-derived) instead of reviews; the proxy does the source lookup. The
+ * conservative matcher tokenizes the title, so passing the title is sufficient.
+ */
+export function toExternalRequest(data: ProductReviewData, source: SourceId): ProxyRequest {
+  const req: ProxyRequest = {
+    source,
+    productId: data.productId,
+    productTitle: data.productTitle,
+    productQuery: { title: data.productTitle },
   };
   if (data.locale) req.locale = data.locale;
   return req;
@@ -98,7 +130,13 @@ export function runDetailSummary(opts: RunDetailOptions = {}): DetailSummaryCont
   const maxTotalEmptyAttempts = opts.maxTotalEmptyAttempts ?? MAX_TOTAL_EMPTY_ATTEMPTS;
   const absoluteObserveTimeoutMs = opts.absoluteObserveTimeoutMs ?? ABSOLUTE_OBSERVE_TIMEOUT_MS;
 
-  const view: SummaryView = createSummaryView(host);
+  let currentSource: SourceId = opts.source ?? DEFAULT_SOURCE;
+
+  const view: SummaryView = createSummaryView(host, {
+    sources: UI_SOURCES,
+    currentSource,
+    onSourceChange: (next) => setSource(next),
+  });
   view.showLoading();
 
   let rendered = false; // a successful result has been rendered
@@ -127,6 +165,14 @@ export function runDetailSummary(opts: RunDetailOptions = {}): DetailSummaryCont
 
   function attempt(): void {
     if (rendered || destroyed || inFlight) return;
+
+    // External source (e.g. RTINGS): no PDP review extraction / observer. Derive
+    // the product identity, check the per-source cache, then ask the proxy to
+    // fetch + summarize the source. A no-match renders the fallback state.
+    if (isExternalSource(currentSource)) {
+      attemptExternal();
+      return;
+    }
 
     const data = extractDetail(doc, url);
     if (data.reviews.length === 0) {
@@ -196,7 +242,7 @@ export function runDetailSummary(opts: RunDetailOptions = {}): DetailSummaryCont
     const fingerprint = reviewsFingerprint(data.reviews);
     // Cache hit -> render immediately, no proxy call (spec: "Cache hits MUST
     // avoid proxy calls").
-    const cached = readCache(request.productId, fingerprint);
+    const cached = readCache(request.productId, fingerprint, currentSource);
     if (cached) {
       view.showResult(cached.data);
       finish();
@@ -209,30 +255,73 @@ export function runDetailSummary(opts: RunDetailOptions = {}): DetailSummaryCont
     void fetchAndRender(request, fingerprint);
   }
 
+  /**
+   * External-source attempt (e.g. RTINGS). Derives the product identity from the
+   * PDP, checks the per-source cache, then asks the proxy to fetch + summarize
+   * the source. There is NO MutationObserver here (the data is server-side, not
+   * in the ML DOM). A 'no-source-data' result renders the fallback (with a
+   * one-click switch back to ml-internal) and finishes.
+   */
+  function attemptExternal(): void {
+    const data = extractDetail(doc, url);
+    const request = toExternalRequest(data, currentSource);
+
+    const cached = readCache(request.productId, EXTERNAL_FINGERPRINT, currentSource);
+    if (cached) {
+      view.showResult(cached.data);
+      finish();
+      return;
+    }
+
+    view.showLoading();
+    inFlight = true;
+    void fetchAndRender(request, EXTERNAL_FINGERPRINT);
+  }
+
   async function fetchAndRender(request: ProxyRequest, fingerprint: string): Promise<void> {
-    try {
-      const result = await fetchSummary(request, fetchImpl);
-      if (destroyed) return;
-      if (result.ok) {
-        writeCache(request.productId, fingerprint, result.data);
-        view.showResult(result.data);
-        finish();
-      } else {
-        // Stop observing on error: a proxy/parse/network error is not resolved
-        // by more reviews arriving, and re-attempting on every DOM mutation
-        // would hammer the proxy. The retry button re-attempts on user intent.
-        stopObserver();
-        view.showError(result.error, () => {
-          // Issue 4: a double-click on "Reintentar" must NOT start a second
-          // concurrent fetch. The `inFlight` guard (in addition to the existing
-          // rendered/destroyed checks) prevents the re-entry.
-          if (rendered || destroyed || inFlight) return;
-          inFlight = true;
-          void fetchAndRender(request, fingerprint);
-        });
-      }
-    } finally {
-      inFlight = false;
+    // Pin the source this fetch was started for, so a result that resolves AFTER
+    // the user switched sources is ignored (no stale render into the new source).
+    const fetchSource = currentSource;
+    // fetchSummary never throws (returns a typed error), so no try/catch needed.
+    const result = await fetchSummary(request, fetchImpl);
+    // Clear inFlight BEFORE any re-dispatch so a follow-up attempt() can proceed.
+    inFlight = false;
+    if (destroyed) return;
+
+    if (fetchSource !== currentSource) {
+      // The user switched sources while this fetch was in flight: discard this
+      // (now stale) result and re-run the pipeline for the current source.
+      attempt();
+      if (!rendered && !destroyed && !isExternalSource(currentSource)) startObserver();
+      return;
+    }
+
+    if (result.ok) {
+      writeCache(request.productId, fingerprint, result.data, fetchSource);
+      view.showResult(result.data);
+      finish();
+    } else if (result.error.kind === 'no-source-data') {
+      // External source has no analysis for this product: render the honest
+      // fallback with a one-click return to ML opinions. Not an error/retry.
+      stopObserver();
+      view.showNoSourceData({
+        label: getUiSource(fetchSource)?.label ?? String(fetchSource),
+        onSwitchToInternal: () => setSource(DEFAULT_SOURCE),
+      });
+      finish();
+    } else {
+      // Stop observing on error: a proxy/parse/network error is not resolved
+      // by more reviews arriving, and re-attempting on every DOM mutation
+      // would hammer the proxy. The retry button re-attempts on user intent.
+      stopObserver();
+      view.showError(result.error, () => {
+        // Issue 4: a double-click on "Reintentar" must NOT start a second
+        // concurrent fetch. The `inFlight` guard (in addition to the existing
+        // rendered/destroyed checks) prevents the re-entry.
+        if (rendered || destroyed || inFlight) return;
+        inFlight = true;
+        void fetchAndRender(request, fingerprint);
+      });
     }
   }
 
@@ -287,11 +376,42 @@ export function runDetailSummary(opts: RunDetailOptions = {}): DetailSummaryCont
     view.destroy();
   }
 
+  /**
+   * Switch the active source and re-run the pipeline for it (live toggle). Resets
+   * the per-attempt state (so a previously-finished source can render again),
+   * reflects the selection in the card header, shows the skeleton, and re-runs.
+   * For ml-internal it re-arms the lazy-review observer; external sources don't
+   * use it. A no-op when the source is unchanged or the card is destroyed.
+   */
+  function setSource(next: SourceId): void {
+    if (destroyed || next === currentSource) return;
+    if (!getUiSource(next)) return; // ignore unknown sources
+    currentSource = next;
+    // Reset state so attempt() runs fresh for the new source. inFlight is left
+    // as-is: any in-flight fetch for the OLD source is ignored on resolve via
+    // the fetchSource pin, and its `finally` clears inFlight.
+    rendered = false;
+    stopObserver();
+    emptyAttempts = 0;
+    totalEmptyAttempts = 0;
+    emptyStartedAt = 0;
+    view.setActiveSource(currentSource);
+    view.showLoading();
+    attempt();
+    if (!rendered && !destroyed && !isExternalSource(currentSource)) startObserver();
+  }
+
   // Initial synchronous attempt (extract + cache hit / empty render, or kick off
   // the async fetch). Its card mutations happen BEFORE the observer starts, so
   // they cannot self-trigger.
   attempt();
-  if (!rendered && !destroyed) startObserver();
+  if (!rendered && !destroyed && !isExternalSource(currentSource)) startObserver();
 
-  return { destroy };
+  return {
+    destroy,
+    setSource,
+    get currentSource() {
+      return currentSource;
+    },
+  };
 }
