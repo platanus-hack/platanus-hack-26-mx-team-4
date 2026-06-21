@@ -229,6 +229,65 @@ describe('prefsPanel — preset chips (Phase 5.2)', () => {
   });
 });
 
+describe('prefsPanel — active preset highlight', () => {
+  beforeEach(() => {
+    freshFixture();
+    onConfigChange = vi.fn();
+  });
+
+  afterEach(() => {
+    panel.destroy();
+    document.body.innerHTML = '';
+    clearPrefs();
+  });
+
+  function pressed(label: string): string | null {
+    return getChip(label).getAttribute('aria-pressed');
+  }
+
+  it('highlights the chip matching the initial config on mount (Balanceado = defaults)', () => {
+    panel = mountPrefsPanel({ onConfigChange, initialConfig: RANK_CONFIG });
+    panel.expand();
+
+    expect(pressed('Balanceado')).toBe('true');
+    expect(pressed('Mejor valorados')).toBe('false');
+    expect(pressed('Más vendidos')).toBe('false');
+    expect(pressed('Económicos')).toBe('false');
+  });
+
+  it('clicking a preset marks it active and clears the previously active chip', () => {
+    panel = mountPrefsPanel({ onConfigChange, initialConfig: RANK_CONFIG });
+    panel.expand();
+
+    getChip('Mejor valorados').click();
+
+    expect(pressed('Mejor valorados')).toBe('true');
+    expect(pressed('Balanceado')).toBe('false');
+    // exactly one chip is active at a time
+    const active = PRESETS.filter((l) => pressed(l) === 'true');
+    expect(active).toEqual(['Mejor valorados']);
+  });
+
+  it('a custom slider move clears every active chip (no preset matches)', () => {
+    vi.useFakeTimers();
+    try {
+      panel = mountPrefsPanel({ onConfigChange, initialConfig: RANK_CONFIG });
+      panel.expand();
+      expect(pressed('Balanceado')).toBe('true'); // starts on a preset
+
+      const w1 = getSlider('w1');
+      w1.value = '1.9'; // off every preset
+      w1.dispatchEvent(new Event('input', { bubbles: true }));
+      vi.advanceTimersByTime(200);
+
+      const active = PRESETS.filter((l) => pressed(l) === 'true');
+      expect(active).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('prefsPanel — slider debounce + persistence (Phase 5.2)', () => {
   beforeEach(() => {
     freshFixture();

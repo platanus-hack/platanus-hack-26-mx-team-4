@@ -45,6 +45,36 @@ const SLIDER_WEIGHTS: readonly (keyof Pick<RankConfig, 'w1' | 'w2' | 'w4'>)[] = 
   'w4',
 ];
 
+/**
+ * Human-friendly captions for the weight sliders. The internal config keys
+ * (w1/w2/w4) are implementation jargon; users see plain Spanish words that say
+ * what each factor actually weighs.
+ */
+const WEIGHT_LABELS: Record<'w1' | 'w2' | 'w4', string> = {
+  w1: 'Calificación',
+  w2: 'Precio',
+  w4: 'Ventas',
+};
+
+/** True when two configs are equal across all weighted fields (preset match). */
+function sameConfig(a: RankConfig, b: RankConfig): boolean {
+  return (
+    a.w1 === b.w1 &&
+    a.w2 === b.w2 &&
+    a.w3 === b.w3 &&
+    a.w4 === b.w4 &&
+    a.priorC === b.priorC
+  );
+}
+
+/** The preset label whose config matches `config`, or null for a custom config. */
+function matchingPreset(config: RankConfig): string | null {
+  for (const label of PRESET_LABELS) {
+    if (sameConfig(presetToConfig(label), config)) return label;
+  }
+  return null;
+}
+
 export interface PrefsPanelController {
   /** Expand the panel (show presets + sliders). No-op if already expanded. */
   expand(): void;
@@ -122,18 +152,23 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
   presetsWrap.className = 'ml-rerank-prefs__presets';
   const presetsLabel = document.createElement('span');
   presetsLabel.className = 'ml-rerank-prefs__group-label';
-  presetsLabel.textContent = 'Presets';
+  presetsLabel.textContent = 'Modos rápidos';
   presetsWrap.appendChild(presetsLabel);
   const chipWrap = document.createElement('div');
   chipWrap.className = 'ml-rerank-prefs__chips';
+  // Track chips by label so the active one can be highlighted on selection.
+  const chips: Record<string, HTMLButtonElement> = {};
   for (const label of PRESET_LABELS) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'ml-rerank-prefs__chip';
     chip.setAttribute('data-ml-preset', label);
+    // aria-pressed doubles as the visual "selected" hook (styled in content.css).
+    chip.setAttribute('aria-pressed', 'false');
     chip.textContent = label;
     chip.addEventListener('click', () => onPresetClick(label));
     chipWrap.appendChild(chip);
+    chips[label] = chip;
   }
   presetsWrap.appendChild(chipWrap);
 
@@ -142,7 +177,7 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
   slidersWrap.className = 'ml-rerank-prefs__sliders';
   const slidersLabel = document.createElement('span');
   slidersLabel.className = 'ml-rerank-prefs__group-label';
-  slidersLabel.textContent = 'Pesos';
+  slidersLabel.textContent = 'Ajuste manual';
   slidersWrap.appendChild(slidersLabel);
   const sliders: Record<'w1' | 'w2' | 'w4', HTMLInputElement> = {} as Record<
     'w1' | 'w2' | 'w4',
@@ -153,7 +188,7 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
     row.className = 'ml-rerank-prefs__slider-row';
     const caption = document.createElement('span');
     caption.className = 'ml-rerank-prefs__slider-caption';
-    caption.textContent = weight;
+    caption.textContent = WEIGHT_LABELS[weight];
     const input = document.createElement('input');
     input.type = 'range';
     input.min = '0';
@@ -204,6 +239,22 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
     }
   }
 
+  /**
+   * Highlight the active preset chip (aria-pressed=true) and clear the rest.
+   * `active = null` clears all chips — used when the config is custom (a slider
+   * moved it off every preset).
+   */
+  function setActivePreset(active: string | null): void {
+    for (const label of PRESET_LABELS) {
+      chips[label].setAttribute('aria-pressed', label === active ? 'true' : 'false');
+    }
+  }
+
+  /** Re-derive the active chip from the live config (preset match or custom). */
+  function syncActivePreset(): void {
+    setActivePreset(matchingPreset(currentConfig));
+  }
+
   /** Commit a new config: track it, persist it, and notify the caller. */
   function commit(next: RankConfig): void {
     currentConfig = next;
@@ -216,6 +267,7 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
     const preset = presetToConfig(label);
     commit(preset);
     syncSliders(); // keep the sliders in sync with the chosen preset
+    setActivePreset(label); // highlight the chosen chip, clear the others
   }
 
   /** Build the custom config from the current slider thumbs + advanced weights. */
@@ -236,6 +288,9 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
       commit(sliderConfig());
+      // A manual slider move may match a preset exactly or be fully custom;
+      // re-derive the highlight so a custom config clears every chip.
+      syncActivePreset();
     }, SLIDER_DEBOUNCE_MS);
   }
 
@@ -253,6 +308,7 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
 
   renderExpanded();
   syncSliders();
+  syncActivePreset(); // highlight the chip matching the persisted/initial config
 
   return { expand, collapse, isExpanded: () => expanded, destroy };
 }
