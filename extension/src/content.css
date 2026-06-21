@@ -763,6 +763,53 @@
   cursor: pointer;
 }
 
+/* "Envío rápido" binary switch (toggles the w5/w6 shipping boosts together). */
+.ml-rerank-prefs__switch-row { position: relative; display: flex; align-items: center; gap: 10px; }
+/* The native checkbox is invisible but overlays the track so clicks/keys work. */
+.ml-rerank-prefs__switch {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 42px;
+  height: 22px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+.ml-rerank-prefs__switch-track {
+  position: relative;
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 22px;
+  border-radius: var(--ml-radius-pill);
+  background: rgba(255, 255, 255, 0.18);
+  transition: background var(--ml-duration-base) var(--ml-easing);
+}
+.ml-rerank-prefs__switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition: transform var(--ml-duration-base) var(--ml-ease-spring);
+}
+.ml-rerank-prefs__switch:checked + .ml-rerank-prefs__switch-track {
+  background: var(--ml-color-ml-yellow);
+}
+.ml-rerank-prefs__switch:checked + .ml-rerank-prefs__switch-track::after {
+  transform: translateX(20px);
+}
+.ml-rerank-prefs__switch:focus-visible + .ml-rerank-prefs__switch-track {
+  box-shadow: 0 0 0 2px rgba(255, 230, 0, 0.35);
+}
+
 /* ============================================================================
    Reduced motion — kill long-running and large transforms.
    ============================================================================ */

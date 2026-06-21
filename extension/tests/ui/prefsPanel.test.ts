@@ -1,4 +1,4 @@
-// Preferences panel UI tests (Phase 5 + Phase 6.3 invariant).
+﻿// Preferences panel UI tests (Phase 5 + Phase 6.3 invariant).
 //
 // The panel is a small collapsed square fixed bottom-right, ABOVE the existing
 // toggle pill (coexists, does not break it). Clicking it expands (CSS
@@ -7,8 +7,8 @@
 // sliders (w3 and priorC stay advanced/defaulted). Preset clicks fire
 // onConfigChange immediately; slider moves are debounced ~200ms. Every change
 // persists via savePrefs (localStorage `ml-rerank:prefs:v1`) and calls
-// onConfigChange(next) — the caller maps that to reorderer.updateConfig (ZERO
-// network, Pilar 1 invariant — asserted in the Phase 6.3 block below).
+// onConfigChange(next) â€” the caller maps that to reorderer.updateConfig (ZERO
+// network, Pilar 1 invariant â€” asserted in the Phase 6.3 block below).
 //
 // Patterns mirror tests/ui/toggle.test.ts: a JSDOM fixture provides the
 // container; the panel + localStorage live on the global vitest jsdom window
@@ -36,7 +36,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixturePath = resolve(here, '..', 'fixtures', 'ml-search.html');
 const html = readFileSync(fixturePath, 'utf8');
 
-const PRESETS = ['Balanceado', 'Mejor valorados', 'Más vendidos', 'Económicos'] as const;
+const PRESETS = ['Balanceado', 'Mejor valorados', 'MÃ¡s vendidos', 'EconÃ³micos'] as const;
 
 let dom: JSDOM;
 let fixtureDoc: Document;
@@ -89,9 +89,15 @@ function getChip(label: string): HTMLElement {
   return el as HTMLElement;
 }
 
-function getSlider(weight: 'w1' | 'w2' | 'w4'): HTMLInputElement {
+function getSlider(weight: 'w1' | 'w2' | 'w4' | 'w7'): HTMLInputElement {
   const el = document.body.querySelector(`[data-ml-weight="${weight}"]`);
   expect(el, `slider for ${weight} exists`).not.toBeNull();
+  return el as HTMLInputElement;
+}
+
+function getShippingSwitch(): HTMLInputElement {
+  const el = document.body.querySelector('[data-ml-switch="shipping"]');
+  expect(el, 'shipping switch exists').not.toBeNull();
   return el as HTMLInputElement;
 }
 
@@ -99,11 +105,11 @@ function clearPrefs(): void {
   try {
     localStorage.removeItem(PREFS_STORAGE_KEY);
   } catch {
-    // storage blocked in this test — nothing to clear
+    // storage blocked in this test â€” nothing to clear
   }
 }
 
-describe('prefsPanel UI — expand/collapse (Phase 5.1)', () => {
+describe('prefsPanel UI â€” expand/collapse (Phase 5.1)', () => {
   beforeEach(() => {
     freshFixture();
     onConfigChange = vi.fn();
@@ -188,7 +194,7 @@ describe('prefsPanel UI — expand/collapse (Phase 5.1)', () => {
   });
 });
 
-describe('prefsPanel — preset chips (Phase 5.2)', () => {
+describe('prefsPanel â€” preset chips (Phase 5.2)', () => {
   beforeEach(() => {
     freshFixture();
     onConfigChange = vi.fn();
@@ -226,8 +232,8 @@ describe('prefsPanel — preset chips (Phase 5.2)', () => {
   });
 
   it('preset click persists the config via savePrefs (localStorage round-trip)', () => {
-    const expected = presetToConfig('Más vendidos');
-    getChip('Más vendidos').click();
+    const expected = presetToConfig('MÃ¡s vendidos');
+    getChip('MÃ¡s vendidos').click();
 
     const raw = localStorage.getItem(PREFS_STORAGE_KEY);
     expect(raw).not.toBeNull();
@@ -235,8 +241,8 @@ describe('prefsPanel — preset chips (Phase 5.2)', () => {
   });
 
   it('preset click syncs the sliders to the preset weights', () => {
-    const preset = presetToConfig('Económicos'); // w1:0.2, w2:1.0, w4:0.2
-    getChip('Económicos').click();
+    const preset = presetToConfig('EconÃ³micos'); // w1:0.2, w2:1.0, w4:0.2
+    getChip('EconÃ³micos').click();
 
     expect(parseFloat(getSlider('w1').value)).toBeCloseTo(preset.w1, 5);
     expect(parseFloat(getSlider('w2').value)).toBeCloseTo(preset.w2, 5);
@@ -244,7 +250,7 @@ describe('prefsPanel — preset chips (Phase 5.2)', () => {
   });
 });
 
-describe('prefsPanel — active preset highlight', () => {
+describe('prefsPanel â€” active preset highlight', () => {
   beforeEach(() => {
     freshFixture();
     onConfigChange = vi.fn();
@@ -266,8 +272,8 @@ describe('prefsPanel — active preset highlight', () => {
 
     expect(pressed('Balanceado')).toBe('true');
     expect(pressed('Mejor valorados')).toBe('false');
-    expect(pressed('Más vendidos')).toBe('false');
-    expect(pressed('Económicos')).toBe('false');
+    expect(pressed('MÃ¡s vendidos')).toBe('false');
+    expect(pressed('EconÃ³micos')).toBe('false');
   });
 
   it('clicking a preset marks it active and clears the previously active chip', () => {
@@ -303,7 +309,7 @@ describe('prefsPanel — active preset highlight', () => {
   });
 });
 
-describe('prefsPanel — slider debounce + persistence (Phase 5.2)', () => {
+describe('prefsPanel â€” slider debounce + persistence (Phase 5.2)', () => {
   beforeEach(() => {
     freshFixture();
     onConfigChange = vi.fn();
@@ -339,11 +345,10 @@ describe('prefsPanel — slider debounce + persistence (Phase 5.2)', () => {
     // w1 overridden by the slider; w2/w4 stay at the initial slider values;
     // w3 and priorC are advanced/defaulted (kept from the initial config).
     expect(onConfigChange).toHaveBeenCalledWith({
+      ...RANK_CONFIG,
       w1: 1.5,
       w2: RANK_CONFIG.w2,
-      w3: RANK_CONFIG.w3,
       w4: RANK_CONFIG.w4,
-      priorC: RANK_CONFIG.priorC,
     });
   });
 
@@ -358,11 +363,10 @@ describe('prefsPanel — slider debounce + persistence (Phase 5.2)', () => {
 
     expect(onConfigChange).toHaveBeenCalledTimes(1);
     expect(onConfigChange).toHaveBeenCalledWith({
+      ...RANK_CONFIG,
       w1: 1.7,
       w2: RANK_CONFIG.w2,
-      w3: RANK_CONFIG.w3,
       w4: RANK_CONFIG.w4,
-      priorC: RANK_CONFIG.priorC,
     });
   });
 
@@ -376,16 +380,15 @@ describe('prefsPanel — slider debounce + persistence (Phase 5.2)', () => {
     const raw = localStorage.getItem(PREFS_STORAGE_KEY);
     expect(raw).not.toBeNull();
     expect(JSON.parse(raw!)).toEqual({
+      ...RANK_CONFIG,
       w1: RANK_CONFIG.w1,
       w2: 0.9,
-      w3: RANK_CONFIG.w3,
       w4: RANK_CONFIG.w4,
-      priorC: RANK_CONFIG.priorC,
     });
   });
 });
 
-describe('prefsPanel — zero-network on config change (Phase 6.3 invariant)', () => {
+describe('prefsPanel â€” zero-network on config change (Phase 6.3 invariant)', () => {
   beforeEach(() => freshFixture());
 
   afterEach(() => {
@@ -404,14 +407,14 @@ describe('prefsPanel — zero-network on config change (Phase 6.3 invariant)', (
       });
       reorderer.reorder(); // establish a baseline applied (default) order
 
-      const economicos = presetToConfig('Económicos');
+      const economicos = presetToConfig('EconÃ³micos');
       // Expected applied order for the preset (DOM order never changes, so
       // parseCards always sees ML's original order).
       const expected = rank(parseCards(container), economicos).map((c) => c.id);
       expect(expected).not.toEqual(appliedIds()); // sanity: preset reorders
 
       panel.expand();
-      getChip('Económicos').click();
+      getChip('EconÃ³micos').click();
 
       expect(appliedIds()).toEqual(expected); // re-ranked with the new config
       expect(fetchSpy).not.toHaveBeenCalled(); // Pilar 1 zero-network preserved
@@ -435,11 +438,10 @@ describe('prefsPanel — zero-network on config change (Phase 6.3 invariant)', (
 
       panel.expand();
       const sliderConfig: RankConfig = {
+        ...RANK_CONFIG,
         w1: 1.5,
         w2: RANK_CONFIG.w2,
-        w3: RANK_CONFIG.w3,
         w4: RANK_CONFIG.w4,
-        priorC: RANK_CONFIG.priorC,
       };
       const expected = rank(parseCards(container), sliderConfig).map((c) => c.id);
       expect(expected).not.toEqual(appliedIds()); // sanity: slider reorders
@@ -456,5 +458,76 @@ describe('prefsPanel — zero-network on config change (Phase 6.3 invariant)', (
       vi.unstubAllGlobals();
       panel.destroy();
     }
+  });
+});
+
+describe('prefsPanel — Envío rápido switch + Descuento slider (new signals)', () => {
+  // These tests exercise only the panel controls (no re-ranking), so they skip
+  // the heavy 2.3MB fixture parse — mounting the panel is all that is needed.
+  beforeEach(() => {
+    onConfigChange = vi.fn();
+    panel = mountPrefsPanel({ onConfigChange, initialConfig: RANK_CONFIG });
+    panel.expand();
+  });
+
+  afterEach(() => {
+    panel.destroy();
+    document.body.innerHTML = '';
+    clearPrefs();
+  });
+
+  it('renders the Descuento slider (w7) at the default weight', () => {
+    expect(parseFloat(getSlider('w7').value)).toBeCloseTo(RANK_CONFIG.w7 ?? 0, 5);
+  });
+
+  it('moving the Descuento slider commits a config with the new w7 (debounced)', () => {
+    vi.useFakeTimers();
+    try {
+      const w7 = getSlider('w7');
+      w7.value = '0.8';
+      w7.dispatchEvent(new Event('input', { bubbles: true }));
+      vi.advanceTimersByTime(200);
+      expect(onConfigChange).toHaveBeenCalledTimes(1);
+      expect(onConfigChange).toHaveBeenCalledWith(expect.objectContaining({ w7: 0.8 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders the Envío rápido switch ON by default (default w5/w6 > 0)', () => {
+    expect(getShippingSwitch().checked).toBe(true);
+  });
+
+  it('turning the switch OFF zeroes both shipping boosts immediately (no debounce)', () => {
+    const sw = getShippingSwitch();
+    sw.checked = false;
+    sw.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onConfigChange).toHaveBeenCalledTimes(1);
+    expect(onConfigChange).toHaveBeenCalledWith(expect.objectContaining({ w5: 0, w6: 0 }));
+  });
+
+  it('turning the switch back ON restores the default shipping boosts', () => {
+    const sw = getShippingSwitch();
+    sw.checked = false;
+    sw.dispatchEvent(new Event('change', { bubbles: true }));
+    sw.checked = true;
+    sw.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onConfigChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ w5: RANK_CONFIG.w5, w6: RANK_CONFIG.w6 }),
+    );
+  });
+
+  it('the switch leaves the slider weights (w1/w2/w4/w7) untouched', () => {
+    const sw = getShippingSwitch();
+    sw.checked = false;
+    sw.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        w1: RANK_CONFIG.w1,
+        w2: RANK_CONFIG.w2,
+        w4: RANK_CONFIG.w4,
+        w7: RANK_CONFIG.w7,
+      }),
+    );
   });
 });

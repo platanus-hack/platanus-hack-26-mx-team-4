@@ -1,8 +1,9 @@
 // Preferences panel UI (Phase 5) — a small collapsed square fixed bottom-
 // right, ABOVE the existing toggle pill (coexists, does not break it). Click
 // expands it (CSS animation via attribute/class toggle) into a panel with the
-// 4 Spanish preset chips + w1/w2/w4 sliders (w3 and priorC stay
-// advanced/defaulted). Collapse again on click/close.
+// 4 Spanish preset chips + sliders (w1/w2/w4 + w7 real-discount) + an "Envío
+// rápido" binary switch (toggles the w5/w6 shipping boosts together). w3 and
+// priorC stay advanced/defaulted. Collapse again on click/close.
 //
 // Every preset / slider change:
 //   1. persists via savePrefs (page localStorage `ml-rerank:prefs:v1`, same
@@ -38,23 +39,31 @@ const PRESET_LABELS: readonly string[] = [
   'Económicos',
 ];
 
-/** Sliders exposed in the panel (w3 + priorC are advanced/defaulted). */
-const SLIDER_WEIGHTS: readonly (keyof Pick<RankConfig, 'w1' | 'w2' | 'w4'>)[] = [
-  'w1',
-  'w2',
-  'w4',
-];
+/** Weights exposed as sliders (w3 + priorC are advanced/defaulted). w7 (real
+ *  discount) joins w1/w2/w4 as a bar; w5/w6 (shipping) are a binary switch. */
+type SliderWeight = 'w1' | 'w2' | 'w4' | 'w7';
+const SLIDER_WEIGHTS: readonly SliderWeight[] = ['w1', 'w2', 'w4', 'w7'];
 
 /**
  * Human-friendly captions for the weight sliders. The internal config keys
- * (w1/w2/w4) are implementation jargon; users see plain Spanish words that say
- * what each factor actually weighs.
+ * are implementation jargon; users see plain Spanish words that say what each
+ * factor actually weighs.
  */
-const WEIGHT_LABELS: Record<'w1' | 'w2' | 'w4', string> = {
+const WEIGHT_LABELS: Record<SliderWeight, string> = {
   w1: 'Calificación',
   w2: 'Precio',
   w4: 'Ventas',
+  w7: 'Descuento',
 };
+
+/** "Envío rápido" ON weights (free shipping w5 + Full w6), sourced from defaults. */
+const SHIPPING_W5_ON = RANK_CONFIG.w5 ?? 0;
+const SHIPPING_W6_ON = RANK_CONFIG.w6 ?? 0;
+
+/** True when the shipping boosts are active in `config` (free shipping or Full). */
+function shippingEnabled(config: RankConfig): boolean {
+  return (config.w5 ?? 0) > 0 || (config.w6 ?? 0) > 0;
+}
 
 /** True when two configs are equal across all weighted fields (preset match). */
 function sameConfig(a: RankConfig, b: RankConfig): boolean {
@@ -63,7 +72,10 @@ function sameConfig(a: RankConfig, b: RankConfig): boolean {
     a.w2 === b.w2 &&
     a.w3 === b.w3 &&
     a.w4 === b.w4 &&
-    a.priorC === b.priorC
+    a.priorC === b.priorC &&
+    (a.w5 ?? 0) === (b.w5 ?? 0) &&
+    (a.w6 ?? 0) === (b.w6 ?? 0) &&
+    (a.w7 ?? 0) === (b.w7 ?? 0)
   );
 }
 
@@ -187,10 +199,7 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
   slidersLabel.className = 'ml-rerank-prefs__group-label';
   slidersLabel.textContent = 'Ajuste manual';
   slidersWrap.appendChild(slidersLabel);
-  const sliders: Record<'w1' | 'w2' | 'w4', HTMLInputElement> = {} as Record<
-    'w1' | 'w2' | 'w4',
-    HTMLInputElement
-  >;
+  const sliders: Record<SliderWeight, HTMLInputElement> = {} as Record<SliderWeight, HTMLInputElement>;
   for (const weight of SLIDER_WEIGHTS) {
     const row = document.createElement('label');
     row.className = 'ml-rerank-prefs__slider-row';
@@ -204,13 +213,34 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
     input.step = '0.1';
     input.className = 'ml-rerank-prefs__slider';
     input.setAttribute('data-ml-weight', weight);
-    input.value = String(currentConfig[weight]);
+    input.value = String(currentConfig[weight] ?? 0);
     input.setAttribute('aria-label', `Peso ${weight}`);
     input.addEventListener('input', () => onSliderInput());
     row.append(caption, input);
     slidersWrap.appendChild(row);
     sliders[weight] = input;
   }
+
+  // "Envío rápido" binary switch — toggles BOTH shipping boosts (free shipping
+  // w5 + Full w6) on/off together. Lives in the manual-adjust group below the
+  // sliders. ON applies the default weights; OFF zeroes both.
+  const switchRow = document.createElement('label');
+  switchRow.className = 'ml-rerank-prefs__switch-row';
+  const switchCaption = document.createElement('span');
+  switchCaption.className = 'ml-rerank-prefs__slider-caption';
+  switchCaption.textContent = 'Envío rápido';
+  const shippingSwitch = document.createElement('input');
+  shippingSwitch.type = 'checkbox';
+  shippingSwitch.className = 'ml-rerank-prefs__switch';
+  shippingSwitch.setAttribute('role', 'switch');
+  shippingSwitch.setAttribute('data-ml-switch', 'shipping');
+  shippingSwitch.setAttribute('aria-label', 'Priorizar envío rápido (gratis y Full)');
+  shippingSwitch.addEventListener('change', () => onShippingToggle());
+  const switchTrack = document.createElement('span');
+  switchTrack.className = 'ml-rerank-prefs__switch-track';
+  switchTrack.setAttribute('aria-hidden', 'true');
+  switchRow.append(switchCaption, shippingSwitch, switchTrack);
+  slidersWrap.appendChild(switchRow);
 
   panelEl.append(header, presetsWrap, slidersWrap);
   document.body.append(square, panelEl);
@@ -240,11 +270,16 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
     }
   }
 
-  /** Reflect `currentConfig`'s w1/w2/w4 back into the slider thumbs. */
+  /** Reflect `currentConfig`'s slider weights back into the slider thumbs. */
   function syncSliders(): void {
     for (const weight of SLIDER_WEIGHTS) {
-      sliders[weight].value = String(currentConfig[weight]);
+      sliders[weight].value = String(currentConfig[weight] ?? 0);
     }
+  }
+
+  /** Reflect `currentConfig`'s shipping boosts into the "Envío rápido" switch. */
+  function syncSwitch(): void {
+    shippingSwitch.checked = shippingEnabled(currentConfig);
   }
 
   /**
@@ -275,20 +310,35 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
     const preset = presetToConfig(label);
     commit(preset);
     syncSliders(); // keep the sliders in sync with the chosen preset
+    syncSwitch(); // and the shipping switch (presets restore default boosts)
     setActivePreset(label); // highlight the chosen chip, clear the others
   }
 
   /** Build the custom config from the current slider thumbs + advanced weights. */
   function sliderConfig(): RankConfig {
     return {
+      // Spread the live config first so advanced/defaulted weights (w3, priorC,
+      // and the shipping boosts w5/w6 — kept by the switch) are carried through;
+      // a slider move never silently zeroes them.
+      ...currentConfig,
       w1: parseFloat(sliders.w1.value) || 0,
       w2: parseFloat(sliders.w2.value) || 0,
-      // w3 and priorC are advanced/defaulted — kept from the live config so a
-      // slider move never silently zeroes the sponsored penalty or the prior.
-      w3: currentConfig.w3,
       w4: parseFloat(sliders.w4.value) || 0,
-      priorC: currentConfig.priorC,
+      w7: parseFloat(sliders.w7.value) || 0,
     };
+  }
+
+  /** Toggle BOTH shipping boosts (w5 free shipping + w6 Full) on/off together. */
+  function onShippingToggle(): void {
+    clearDebounce();
+    const on = shippingSwitch.checked;
+    commit({
+      ...currentConfig,
+      w5: on ? SHIPPING_W5_ON : 0,
+      w6: on ? SHIPPING_W6_ON : 0,
+    });
+    // Toggling shipping may move the config off (or back onto) a preset.
+    syncActivePreset();
   }
 
   function onSliderInput(): void {
@@ -316,6 +366,7 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
 
   renderExpanded();
   syncSliders();
+  syncSwitch();
   syncActivePreset(); // highlight the chip matching the persisted/initial config
 
   return { expand, collapse, isExpanded: () => expanded, destroy };
