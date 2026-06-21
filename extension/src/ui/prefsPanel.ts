@@ -118,14 +118,21 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
   let expanded = false;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // --- collapsed square (the toggle button) ---
+  // --- collapsed circular button (twin to the toggle, stacked above it) ---
   const square = document.createElement('button');
   square.type = 'button';
   square.className = 'ml-rerank-prefs';
   square.setAttribute('aria-expanded', 'false');
   square.setAttribute('aria-label', 'Abrir preferencias de re-ranking');
   square.title = 'Preferencias de re-ranking';
-  square.textContent = '≚';
+  const sqIcon = document.createElement('span');
+  sqIcon.className = 'ml-rerank-prefs__icon';
+  sqIcon.setAttribute('aria-hidden', 'true');
+  // Inline import to avoid circular module ordering issues.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  sqIcon.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10"/><circle cx="17" cy="6" r="2.2"/><path d="M4 12h6"/><circle cx="13" cy="12" r="2.2"/><path d="M4 18h12"/><circle cx="19" cy="18" r="2.2"/></svg>';
+  square.appendChild(sqIcon);
 
   // --- expanded panel (sibling; interactive controls cannot live inside a button) ---
   const panelEl = document.createElement('div');
@@ -144,7 +151,8 @@ export function mountPrefsPanel(options: MountPrefsPanelOptions): PrefsPanelCont
   closeBtn.type = 'button';
   closeBtn.className = 'ml-rerank-prefs__close';
   closeBtn.setAttribute('aria-label', 'Cerrar preferencias');
-  closeBtn.textContent = '×';
+  closeBtn.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   header.append(title, closeBtn);
 
   // Preset chips group.

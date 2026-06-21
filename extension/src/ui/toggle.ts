@@ -1,38 +1,21 @@
-// Toggle UI — injects a fixed, clearly-visible pill control that gates the
-// reorderer. ON applies the ranked order (delegates to the reorderer, which sets
-// `style.order` on the cards) and starts the observer; OFF stops the observer
-// and restores the EXACT original order by CLEARING `style.order` on every card
-// row (spec: "Visible Toggle and Exact Restore").
+// Toggle UI — injects a fixed, clearly-visible CIRCULAR power button that gates
+// the reorderer. ON applies the ranked order (delegates to the reorderer, which
+// sets `style.order` on the cards) and starts the observer; OFF stops the
+// observer and restores the EXACT original order by CLEARING `style.order` on
+// every card row (spec: "Visible Toggle and Exact Restore").
 //
-// Because the reorderer never moves DOM nodes (it only sets the CSS `order`
-// property — see observe.ts for why), the DOM is always in MercadoLibre's true
-// served order. So restoring is just clearing the inline `order` we set; no
-// snapshot is needed, and the restore is exact even after ML/React re-renders.
-//
-// Styling lives in src/content.css (.ml-rerank-toggle). The pill is appended to
-// document.body with position:fixed and max z-index so it floats over ML's UI.
+// Visual: circular ~56px button with a power-glyph SVG. OFF = dark glass.
+// ON = ML-yellow → electric-violet gradient with a pulsating halo and conic
+// rotating ring that signals an active third-party layer over the page.
+// A side tooltip appears on hover; the textual state is also exposed via
+// aria-pressed / data-ml-rerank-state for tests and a11y.
 
 import type { RerankController } from '../observe';
+import { powerIcon } from './icons';
 
-/** Attribute stamped on reordered card rows by the reorderer; cleared on restore. */
 const RERANK_ATTR = 'data-ml-reranked';
-
-/**
- * localStorage key for the persisted toggle state (`"on"` / `"off"`). Uses the
- * PAGE's localStorage (content scripts share the page's origin storage), NOT
- * chrome.storage, so the manifest stays permission-free. All MercadoLibre
- * listing pages within one TLD share an origin, so the state survives the
- * full-page navigations ML uses for pagination (`..._Desde_N`).
- */
 const STORAGE_KEY = 'ml-rerank:enabled';
 
-/**
- * Read the persisted toggle state. Returns `'off'` for any missing/unknown
- * value, and ALSO on any storage access failure (opaque origin, privacy mode,
- * quota/disabled storage). A storage failure must NEVER break the toggle — it
- * just falls back to the in-memory `'off'` default (per jsdom opaque-origin
- * discovery: `localStorage` access can throw on non-real-origin windows).
- */
 function readPersistedState(): 'on' | 'off' {
   try {
     return localStorage.getItem(STORAGE_KEY) === 'on' ? 'on' : 'off';
@@ -41,10 +24,6 @@ function readPersistedState(): 'on' | 'off' {
   }
 }
 
-/**
- * Persist the toggle state. Silently ignores any storage failure so toggling
- * keeps working for the current page view even when storage is unavailable.
- */
 function writePersistedState(next: 'on' | 'off'): void {
   try {
     localStorage.setItem(STORAGE_KEY, next);
@@ -55,22 +34,12 @@ function writePersistedState(next: 'on' | 'off'): void {
 }
 
 export interface ToggleController {
-  /** Apply ranked order and start observing. No-op if already on. */
   on(): void;
-  /** Stop observing and restore the exact original order. No-op if already off. */
   off(): void;
-  /** Remove the pill, stop the reorderer, and restore the original order. */
   destroy(): void;
-  /** Current state. */
   isOn(): boolean;
 }
 
-/**
- * Inject the re-rank toggle pill and wire it to `reorderer` operating on
- * `container`. OFF restores exactly what MercadoLibre served by clearing the
- * `style.order` the reorderer set — the DOM is never moved, so this is always
- * exact. Returns a controller for programmatic use (and tests).
- */
 export function mountToggle(
   container: HTMLElement,
   reorderer: RerankController,
@@ -80,14 +49,29 @@ export function mountToggle(
   pill.className = 'ml-rerank-toggle';
   pill.setAttribute('data-ml-rerank-state', 'off');
   pill.setAttribute('aria-pressed', 'false');
-  pill.title = 'Toggle MercadoLibre quality re-ranking';
+  pill.setAttribute('aria-label', 'Activar re-ranking');
 
-  const dot = document.createElement('span');
-  dot.className = 'ml-rerank-toggle__dot';
-  const text = document.createElement('span');
-  text.className = 'ml-rerank-toggle__text';
-  text.textContent = 'Re-rank: OFF';
-  pill.append(dot, text);
+  // Rotating conic ring — purely decorative; visible only in the ON state via CSS.
+  const ring = document.createElement('span');
+  ring.className = 'ml-rerank-toggle__ring';
+  ring.setAttribute('aria-hidden', 'true');
+
+  // Pulsating halo — sits behind the button to signal "active third-party layer".
+  const halo = document.createElement('span');
+  halo.className = 'ml-rerank-toggle__halo';
+  halo.setAttribute('aria-hidden', 'true');
+
+  const icon = document.createElement('span');
+  icon.className = 'ml-rerank-toggle__icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = powerIcon;
+
+  const tooltip = document.createElement('span');
+  tooltip.className = 'ml-rerank-toggle__tooltip';
+  tooltip.setAttribute('role', 'tooltip');
+  tooltip.textContent = 'Re-rank: OFF';
+
+  pill.append(halo, ring, icon, tooltip);
   document.body.appendChild(pill);
 
   let state: 'on' | 'off' = 'off';
@@ -95,11 +79,10 @@ export function mountToggle(
   function render(): void {
     pill.setAttribute('data-ml-rerank-state', state);
     pill.setAttribute('aria-pressed', state === 'on' ? 'true' : 'false');
-    text.textContent = `Re-rank: ${state.toUpperCase()}`;
+    pill.setAttribute('aria-label', state === 'on' ? 'Desactivar re-ranking' : 'Activar re-ranking');
+    tooltip.textContent = `Re-rank: ${state.toUpperCase()}`;
   }
 
-  /** Clear the CSS `order` we set on every card row, returning the list to ML's
-   *  true served order (the DOM was never moved, so this is exact). */
   function restoreOriginal(): void {
     for (const node of Array.from(container.children) as HTMLElement[]) {
       if (node.style.order !== '') node.style.order = '';
@@ -114,6 +97,10 @@ export function mountToggle(
     reorderer.start();
     writePersistedState('on');
     render();
+    // Micro press animation (re-trigger by removing the class on the next frame).
+    pill.classList.remove('ml-rerank-toggle--press');
+    void pill.offsetWidth;
+    pill.classList.add('ml-rerank-toggle--press');
   }
 
   function off(): void {
@@ -123,6 +110,9 @@ export function mountToggle(
     restoreOriginal();
     writePersistedState('off');
     render();
+    pill.classList.remove('ml-rerank-toggle--press');
+    void pill.offsetWidth;
+    pill.classList.add('ml-rerank-toggle--press');
   }
 
   function toggle(): void {
@@ -131,11 +121,6 @@ export function mountToggle(
   }
 
   function destroy(): void {
-    // Teardown is NOT a user toggle action, so do NOT persist 'off' here —
-    // writing 'off' would silently clear the cross-page persistence a user left
-    // enabled. Restore the original order (clear `style.order`), stop the
-    // observer, and remove the pill. (In production the pill lives for the whole
-    // page session; this is mainly used by tests / explicit cleanup.)
     reorderer.stop();
     restoreOriginal();
     state = 'off';
@@ -144,16 +129,6 @@ export function mountToggle(
 
   pill.addEventListener('click', toggle);
 
-  // Pagination persistence: ML listing pagination (page 1 -> page 2) is a FULL
-  // page navigation to `..._Desde_N`, so the content script re-injects fresh on
-  // every page. Without persistence the toggle would reset to OFF on each page
-  // and the user would have to re-enable re-ranking every time. So, if the
-  // persisted state is "on" (written by a previous page in the same origin),
-  // auto-apply ON here: reorder + start the observer + render the pill as ON.
-  //
-  // The original-order snapshot above was captured BEFORE this auto-apply, so
-  // OFF still restores ML's true original order on THIS page. A storage failure
-  // (opaque origin / privacy mode) degrades to the OFF default — never throws.
   if (readPersistedState() === 'on') {
     on();
   } else {

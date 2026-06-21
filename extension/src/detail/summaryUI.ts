@@ -1,87 +1,114 @@
 // Summary card UI (Pilar 2) — renders the LLM summary into the PDP with four
-// states: loading (skeleton), result (strong/weak/verdict), empty (no reviews),
-// and error (retryable / rate-limited).
+// states: loading (thinking dots + indeterminate bar), result (typewriter-
+// animated strong/weak/verdict), empty (no reviews), and error (retryable /
+// rate-limited).
 //
-// LAYOUT: a PERSISTENT header (title + minimize/expand button) is created once
-// and survives every state change; only the BODY is replaced per state. The
-// minimize button toggles `data-ml-collapsed` on the card root (CSS hides the
-// body when collapsed), so the user can shrink the card out of the way without
-// losing the summary.
+// LAYOUT: a PERSISTENT header (sparkle + title + AI badge + circular chevron
+// minimize) is created once and survives every state change; only the BODY is
+// replaced per state. The minimize button toggles `data-ml-collapsed` on the
+// card root (CSS hides the body when collapsed).
 //
-// SECURITY/ROBUSTNESS: every user-facing string is set via textContent, NEVER
-// innerHTML. Strong/weak points come from the LLM and are treated as untrusted
-// text — they are never parsed as HTML, so no markup injection is possible.
+// TYPEWRITER: result text (verdict + each strong/weak bullet) is animated in
+// cascade via src/ui/typewriter.ts. A single AbortController per view is
+// recycled across state transitions so any in-flight typing animation is
+// cancelled before the next render — prevents two animations writing to the
+// same node.
 //
-// Styling lives in src/content.css (.ml-summary-card). The card root is tagged
-// `data-ml-summary` so the pipeline's MutationObserver can ignore our own
-// writes (loop avoidance, same idea as Pilar 1's data-ml-reranked tag).
+// SECURITY: every user-facing string is written via textContent (the
+// typewriter itself uses textContent internally). LLM strong/weak/verdict are
+// treated as untrusted text — no innerHTML. The static SVG icon markup we
+// inject via innerHTML is authored by us (src/ui/icons.ts) and contains no
+// dynamic data.
 
 import type { ProxyResponse, SummaryError } from './types';
+import { typewriter, createCaret } from '../ui/typewriter';
+import { sparkleIcon, chevronIcon } from '../ui/icons';
 
-/** State stamped on the card root so CSS + tests can read the current state. */
 export type SummaryState = 'loading' | 'empty' | 'error' | 'result';
 
-/** A mounted summary card bound to a host element. */
 export interface SummaryView {
-  /** The card root element (tagged data-ml-summary). */
   readonly el: HTMLElement;
   showLoading(): void;
   showEmpty(opts?: { hasMoreReviewsHint?: boolean }): void;
   showError(error: SummaryError, onRetry?: () => void): void;
   showResult(summary: ProxyResponse): void;
-  /** Remove the card from the DOM. */
   destroy(): void;
 }
 
-/** Attribute stamped on the card root for state + observer loop-avoidance. */
 const SUMMARY_ATTR = 'data-ml-summary';
-/** Attribute toggled by the minimize button (CSS hides the body when "true"). */
 const COLLAPSED_ATTR = 'data-ml-collapsed';
 
-/**
- * Create a summary card and append it to `host`. The card root + its header
- * (title + minimize button) are created once; only the BODY is replaced across
- * state transitions, so the minimize control persists and the pipeline observer
- * can ignore our own writes.
- */
 export function createSummaryView(host: HTMLElement): SummaryView {
   const card = document.createElement('aside');
   card.className = 'ml-summary-card';
   card.setAttribute(SUMMARY_ATTR, 'loading');
   card.setAttribute(COLLAPSED_ATTR, 'false');
 
-  // Persistent header: title + minimize/expand toggle. Survives state changes.
+  // Persistent header: sparkle icon + title + AI badge + minimize chevron.
   const header = document.createElement('div');
   header.className = 'ml-summary-card__header';
+
+  const titleWrap = document.createElement('div');
+  titleWrap.className = 'ml-summary-card__title-wrap';
+
+  const sparkle = document.createElement('span');
+  sparkle.className = 'ml-summary-card__sparkle';
+  sparkle.setAttribute('aria-hidden', 'true');
+  sparkle.innerHTML = sparkleIcon;
+
   const title = document.createElement('div');
   title.className = 'ml-summary-card__title';
   title.textContent = 'Resumen de opiniones';
+
+  const badge = document.createElement('span');
+  badge.className = 'ml-summary-card__badge-ai';
+  badge.textContent = 'AI';
+
+  titleWrap.append(sparkle, title, badge);
+
   const minimize = document.createElement('button');
   minimize.type = 'button';
   minimize.className = 'ml-summary-card__minimize';
   minimize.setAttribute('aria-expanded', 'true');
   minimize.setAttribute('aria-label', 'Minimizar resumen');
-  minimize.textContent = '–';
+  minimize.innerHTML = chevronIcon;
   minimize.addEventListener('click', toggleCollapsed);
-  header.append(title, minimize);
 
-  // Body: cleared + rebuilt on every state transition.
+  header.append(titleWrap, minimize);
+
   const body = document.createElement('div');
   body.className = 'ml-summary-card__body';
 
   card.append(header, body);
   host.appendChild(card);
 
+  // One AbortController per active render — cancel before next state transition
+  // so in-flight typewriter animations stop cleanly (no leaks, no double-writes).
+  let typingAbort: AbortController | null = null;
+
+  function cancelTyping(): void {
+    if (typingAbort) {
+      typingAbort.abort();
+      typingAbort = null;
+    }
+  }
+
+  function newTypingSignal(): AbortSignal {
+    cancelTyping();
+    typingAbort = new AbortController();
+    return typingAbort.signal;
+  }
+
   function toggleCollapsed(): void {
     const collapsed = card.getAttribute(COLLAPSED_ATTR) === 'true';
     const next = !collapsed;
     card.setAttribute(COLLAPSED_ATTR, String(next));
     minimize.setAttribute('aria-expanded', String(!next));
-    minimize.textContent = next ? '+' : '–';
     minimize.setAttribute('aria-label', next ? 'Expandir resumen' : 'Minimizar resumen');
   }
 
   function clear(): void {
+    cancelTyping();
     while (body.firstChild) body.removeChild(body.firstChild);
   }
 
@@ -92,20 +119,35 @@ export function createSummaryView(host: HTMLElement): SummaryView {
   function showLoading(): void {
     setState('loading');
     clear();
+    const thinking = document.createElement('div');
+    thinking.className = 'ml-summary-card__thinking';
     for (let i = 0; i < 3; i++) {
-      const line = document.createElement('div');
-      line.className = 'ml-summary-card__skeleton';
-      body.appendChild(line);
+      const dot = document.createElement('span');
+      dot.className = 'ml-summary-card__thinking-dot';
+      thinking.appendChild(dot);
     }
+    const label = document.createElement('span');
+    label.className = 'ml-summary-card__thinking-label';
+    label.textContent = 'Analizando opiniones…';
+    thinking.appendChild(label);
+    body.appendChild(thinking);
+
+    const bar = document.createElement('div');
+    bar.className = 'ml-summary-card__progress';
+    const fill = document.createElement('span');
+    fill.className = 'ml-summary-card__progress-fill';
+    bar.appendChild(fill);
+    body.appendChild(bar);
   }
 
   function showEmpty(opts?: { hasMoreReviewsHint?: boolean }): void {
     setState('empty');
     clear();
+    const signal = newTypingSignal();
     const msg = document.createElement('p');
     msg.className = 'ml-summary-card__empty';
-    msg.textContent = 'Aún no hay opiniones para resumir.';
     body.appendChild(msg);
+    typewriter(msg, 'Aún no hay opiniones para resumir.', { signal, caret: createCaret() });
     if (opts?.hasMoreReviewsHint) {
       const hint = document.createElement('p');
       hint.className = 'ml-summary-card__hint';
@@ -123,9 +165,6 @@ export function createSummaryView(host: HTMLElement): SummaryView {
     body.appendChild(msg);
 
     if (error.kind === 'rate-limited') {
-      // 429 (rate limit / quota): retrying now won't help, so instead of a dead
-      // disabled button we show a calm hint. Keeps the failed state looking
-      // intentional and polished rather than broken.
       const hint = document.createElement('p');
       hint.className = 'ml-summary-card__hint';
       hint.textContent = 'Volvé a intentarlo más tarde.';
@@ -143,27 +182,52 @@ export function createSummaryView(host: HTMLElement): SummaryView {
   function showResult(summary: ProxyResponse): void {
     setState('result');
     clear();
-    appendSection('Puntos a favor', 'ml-summary-card__strong', summary.strongPoints);
-    appendSection('Puntos en contra', 'ml-summary-card__weak', summary.weakPoints);
+    const signal = newTypingSignal();
+
+    // Build a flat queue of (element, text) typing tasks so we can cascade them
+    // sequentially. The first task starts immediately; each subsequent task
+    // kicks off on the previous task's onDone, giving a natural "AI is writing"
+    // cascade across pros → cons → verdict.
+    const queue: { el: HTMLElement; text: string }[] = [];
+
+    queue.push(...appendSection('Puntos a favor', 'ml-summary-card__strong', summary.strongPoints));
+    queue.push(...appendSection('Puntos en contra', 'ml-summary-card__weak', summary.weakPoints));
 
     const verdictBox = document.createElement('div');
     verdictBox.className = 'ml-summary-card__verdict';
-    const label = document.createElement('span');
-    label.className = 'ml-summary-card__verdict-label';
-    label.textContent = 'Veredicto';
+    const verdictLabel = document.createElement('span');
+    verdictLabel.className = 'ml-summary-card__verdict-label';
+    verdictLabel.textContent = 'Veredicto';
     const verdict = document.createElement('p');
-    verdict.textContent = summary.verdict;
-    verdictBox.append(label, verdict);
+    verdictBox.append(verdictLabel, verdict);
     body.appendChild(verdictBox);
+    queue.push({ el: verdict, text: summary.verdict });
+
+    function runNext(i: number): void {
+      if (signal.aborted || i >= queue.length) return;
+      const { el, text } = queue[i];
+      typewriter(el, text, {
+        signal,
+        cps: 95,
+        caret: createCaret(),
+        onDone: () => runNext(i + 1),
+      });
+    }
+    runNext(0);
   }
 
-  function appendSection(labelText: string, itemClass: string, items: string[]): void {
+  function appendSection(
+    labelText: string,
+    itemClass: string,
+    items: string[],
+  ): { el: HTMLElement; text: string }[] {
     const section = document.createElement('div');
     section.className = 'ml-summary-card__section';
     const label = document.createElement('div');
     label.className = 'ml-summary-card__section-label';
     label.textContent = labelText;
     section.appendChild(label);
+    const tasks: { el: HTMLElement; text: string }[] = [];
     if (items.length === 0) {
       const empty = document.createElement('p');
       empty.className = 'ml-summary-card__section-empty';
@@ -174,15 +238,17 @@ export function createSummaryView(host: HTMLElement): SummaryView {
       for (const item of items) {
         const li = document.createElement('li');
         li.className = itemClass;
-        li.textContent = item; // untrusted LLM text -> textContent only
         list.appendChild(li);
+        tasks.push({ el: li, text: item });
       }
       section.appendChild(list);
     }
     body.appendChild(section);
+    return tasks;
   }
 
   function destroy(): void {
+    cancelTyping();
     card.remove();
   }
 
