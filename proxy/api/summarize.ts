@@ -17,8 +17,8 @@
 // sides validate defensively.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { ProductQuery, NormalizedReview, NormalizedAnalysis } from './sources/rtings.ts';
-import { getServerAdapter } from './sources/registry.ts';
+import type { ProductQuery, NormalizedReview, NormalizedAnalysis } from './sources/rtings.js';
+import { getServerAdapter } from './sources/registry.js';
 
 /** Mirror of extension ReviewText/ProxyRequest/ProxyResponse (see header). */
 type SourceId = 'ml-internal' | 'rtings' | (string & {});

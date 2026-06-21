@@ -3,7 +3,6 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
     "lib": ["ES2022"],
     "types": ["vitest/globals", "node"],
     "strict": true,
