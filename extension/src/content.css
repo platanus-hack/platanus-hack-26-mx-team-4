@@ -156,47 +156,6 @@
   100% { background-position: -200% 0; }
 }
 
-<<<<<<< HEAD
-/* ============================================================================
-   Re-rank circular toggle (replaces the old pill). Bottom-right FAB with a
-   pulsating halo + rotating conic ring in the ON state. The dark/glass OFF
-   state keeps the control unobtrusive when re-ranking is disabled.
-   ============================================================================ */
-.ml-rerank-toggle {
-=======
-/* Empty state. */
-.ml-summary-card__empty {
-  margin: 0;
-  color: #555;
-}
-
-.ml-summary-card__hint {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: #777;
-}
-
-/* Error state + retry button. */
-.ml-summary-card__error {
-  margin: 0 0 10px;
-  color: #b00020;
-}
-
-.ml-summary-card__retry {
-  padding: 6px 12px;
-  border: 0;
-  border-radius: 8px;
-  background: #2b2b2b;
-  color: #fff;
-  font: 600 13px/1 inherit;
-  cursor: pointer;
-}
-
-.ml-summary-card__retry:disabled {
-  background: #9aa0a6;
-  cursor: not-allowed;
-}
-
 /* Source selector (segmented pills / dropdown). */
 .ml-summary-card__sources {
   display: flex;
@@ -269,66 +228,12 @@
   text-decoration: underline;
 }
 
-/* Result sections. */
-.ml-summary-card__section {
-  margin-bottom: 12px;
-}
-
-.ml-summary-card__section-label {
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
-.ml-summary-card__section ul {
-  margin: 0;
-  padding-left: 18px;
-}
-
-.ml-summary-card__section li {
-  margin: 2px 0;
-}
-
-.ml-summary-card__strong {
-  color: #1b873f;
-}
-
-.ml-summary-card__weak {
-  color: #b00020;
-}
-
-.ml-summary-card__section-empty {
-  margin: 0;
-  color: #999;
-}
-
-.ml-summary-card__verdict {
-  margin-top: 8px;
-  padding-top: 10px;
-  border-top: 1px solid #ececec;
-}
-
-.ml-summary-card__verdict-label {
-  display: block;
-  font-weight: 600;
-  font-size: 12px;
-  color: #777;
-  margin-bottom: 2px;
-}
-
-.ml-summary-card__verdict p {
-  margin: 0;
-}
-
-/* ===========================================================================
-   ML Re-rank preferences panel (Pilar 1, Phase 5). A small collapsed square
-   fixed bottom-right, ABOVE the toggle pill (.ml-rerank-toggle sits at
-   bottom:16px; this sits at bottom:64px so the two coexist without overlap).
-   Clicking the square expands a panel with the 4 Spanish preset chips + w1/w2/
-   w4 sliders. Expand/collapse animates via the [data-ml-prefs-open] attribute
-   (opacity + max-height + transform transitions) — no JS height measurement.
-   =========================================================================== */
-.ml-rerank-prefs {
->>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
+/* ============================================================================
+   Re-rank circular toggle (replaces the old pill). Bottom-right FAB with a
+   pulsating halo + rotating conic ring in the ON state. The dark/glass OFF
+   state keeps the control unobtrusive when re-ranking is disabled.
+   ============================================================================ */
+.ml-rerank-toggle {
   position: fixed;
   right: var(--ml-offset-edge);
   bottom: var(--ml-offset-edge);

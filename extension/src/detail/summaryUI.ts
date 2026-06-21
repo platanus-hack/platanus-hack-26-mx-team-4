@@ -20,14 +20,9 @@
 // inject via innerHTML is authored by us (src/ui/icons.ts) and contains no
 // dynamic data.
 
-<<<<<<< HEAD
-import type { ProxyResponse, SummaryError } from './types';
+import type { ProxyResponse, SummaryError, SourceId } from './types';
 import { typewriter, createCaret } from '../ui/typewriter';
 import { sparkleIcon, chevronIcon } from '../ui/icons';
-
-export type SummaryState = 'loading' | 'empty' | 'error' | 'result';
-=======
-import type { ProxyResponse, SummaryError, SourceId } from './types';
 
 /** State stamped on the card root so CSS + tests can read the current state. */
 export type SummaryState = 'loading' | 'empty' | 'error' | 'result' | 'no-source-data';
@@ -47,7 +42,6 @@ export interface SummaryViewOptions {
   /** Called when the user picks a DIFFERENT source. */
   onSourceChange?: (source: SourceId) => void;
 }
->>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
 
 export interface SummaryView {
   readonly el: HTMLElement;
@@ -55,11 +49,6 @@ export interface SummaryView {
   showEmpty(opts?: { hasMoreReviewsHint?: boolean }): void;
   showError(error: SummaryError, onRetry?: () => void): void;
   showResult(summary: ProxyResponse): void;
-<<<<<<< HEAD
-  destroy(): void;
-}
-
-=======
   /** External source has no analysis for this product (fallback state). */
   showNoSourceData(opts: { label: string; onSwitchToInternal?: () => void }): void;
   /** Reflect the active source in the selector (does NOT fire onSourceChange). */
@@ -72,13 +61,9 @@ export interface SummaryView {
 const SEGMENTED_MAX = 3;
 
 /** Attribute stamped on the card root for state + observer loop-avoidance. */
->>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
 const SUMMARY_ATTR = 'data-ml-summary';
 const COLLAPSED_ATTR = 'data-ml-collapsed';
 
-<<<<<<< HEAD
-export function createSummaryView(host: HTMLElement): SummaryView {
-=======
 /**
  * Create a summary card and append it to `host`. The card root + its header
  * (title + minimize button) are created once; only the BODY is replaced across
@@ -89,7 +74,6 @@ export function createSummaryView(host: HTMLElement, options: SummaryViewOptions
   const sources = options.sources ?? [];
   let activeSource: SourceId = options.currentSource ?? (sources[0]?.id ?? 'ml-internal');
 
->>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
   const card = document.createElement('aside');
   card.className = 'ml-summary-card';
   card.setAttribute(SUMMARY_ATTR, 'loading');
@@ -125,16 +109,13 @@ export function createSummaryView(host: HTMLElement, options: SummaryViewOptions
   minimize.innerHTML = chevronIcon;
   minimize.addEventListener('click', toggleCollapsed);
 
-<<<<<<< HEAD
   header.append(titleWrap, minimize);
 
-=======
   // Optional source selector (segmented pills, or a dropdown beyond SEGMENTED_MAX).
   // Sits on its own row under the title so it persists across state changes.
   const selector = sources.length > 1 ? buildSelector() : null;
 
   // Body: cleared + rebuilt on every state transition.
->>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
   const body = document.createElement('div');
   body.className = 'ml-summary-card__body';
 
@@ -142,7 +123,6 @@ export function createSummaryView(host: HTMLElement, options: SummaryViewOptions
   else card.append(header, body);
   host.appendChild(card);
 
-<<<<<<< HEAD
   // One AbortController per active render — cancel before next state transition
   // so in-flight typewriter animations stop cleanly (no leaks, no double-writes).
   let typingAbort: AbortController | null = null;
@@ -158,7 +138,8 @@ export function createSummaryView(host: HTMLElement, options: SummaryViewOptions
     cancelTyping();
     typingAbort = new AbortController();
     return typingAbort.signal;
-=======
+  }
+
   /** Build the source selector (pills or dropdown) wired to onSourceChange. */
   function buildSelector(): { el: HTMLElement; setActive(id: SourceId): void } {
     const wrap = document.createElement('div');
@@ -216,7 +197,6 @@ export function createSummaryView(host: HTMLElement, options: SummaryViewOptions
   function setActiveSource(id: SourceId): void {
     activeSource = id;
     selector?.setActive(id);
->>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
   }
 
   function toggleCollapsed(): void {
@@ -321,7 +301,6 @@ export function createSummaryView(host: HTMLElement, options: SummaryViewOptions
     const verdict = document.createElement('p');
     verdictBox.append(verdictLabel, verdict);
     body.appendChild(verdictBox);
-<<<<<<< HEAD
     queue.push({ el: verdict, text: summary.verdict });
 
     function runNext(i: number): void {
@@ -335,7 +314,6 @@ export function createSummaryView(host: HTMLElement, options: SummaryViewOptions
       });
     }
     runNext(0);
-=======
 
     appendAttribution(summary.sourceMeta);
   }
@@ -377,7 +355,6 @@ export function createSummaryView(host: HTMLElement, options: SummaryViewOptions
       btn.addEventListener('click', opts.onSwitchToInternal);
       body.appendChild(btn);
     }
->>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
   }
 
   function appendSection(
