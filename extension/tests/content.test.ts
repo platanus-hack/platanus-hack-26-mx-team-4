@@ -23,7 +23,7 @@ vi.mock('../src/observe', () => ({
   })),
 }));
 vi.mock('../src/ui/toggle', () => ({
-  mountToggle: vi.fn(() => ({ on() {}, off() {}, destroy() {}, isOn: () => false })),
+  mountToggle: vi.fn(() => ({ on: vi.fn(), off: vi.fn(), destroy() {}, isOn: () => false })),
 }));
 vi.mock('../src/ui/prefsPanel', () => ({
   mountPrefsPanel: vi.fn(() => ({
@@ -180,6 +180,34 @@ describe('main() — routing dispatch', () => {
 
     expect(reorderer.updateConfig).toHaveBeenCalledTimes(1);
     expect(reorderer.updateConfig).toHaveBeenCalledWith(next);
+  });
+
+  it('listing route wires onConfigChange -> toggle.on() so picking a preference turns Re-rank ON', () => {
+    loadPrefsMock.mockReturnValue({ w1: 0.6, w2: 0.3, w3: 0.4, w4: 0.3, priorC: 5 });
+    vi.stubGlobal('location', { href: 'https://listado.mercadolibre.com.mx/audifonos' });
+    findContainerMock.mockReturnValue(document.createElement('ol'));
+
+    main();
+
+    const toggle = mountToggleMock.mock.results[0].value as { on: ReturnType<typeof vi.fn> };
+    const reorderer = createReordererMock.mock.results[0].value as {
+      updateConfig: ReturnType<typeof vi.fn>;
+    };
+    const opts = mountPrefsPanelMock.mock.calls[0][0] as {
+      onConfigChange: (c: RankConfig) => void;
+    };
+    // A preference change implies intent to re-rank: it must turn the toggle ON.
+    expect(toggle.on).not.toHaveBeenCalled();
+
+    const next: RankConfig = { w1: 1.0, w2: 0.1, w3: 0.4, w4: 0.1, priorC: 5 };
+    opts.onConfigChange(next);
+
+    expect(reorderer.updateConfig).toHaveBeenCalledWith(next); // new weights applied
+    expect(toggle.on).toHaveBeenCalledTimes(1); // and Re-rank is switched ON
+
+    // A second preference change keeps it ON (idempotent; on() is a no-op when ON).
+    opts.onConfigChange({ w1: 0.2, w2: 1.0, w3: 0.4, w4: 0.2, priorC: 5 });
+    expect(toggle.on).toHaveBeenCalledTimes(2);
   });
 
   it('routes a PDP to the Pilar 2 summary pipeline, NOT the listing branch', () => {
