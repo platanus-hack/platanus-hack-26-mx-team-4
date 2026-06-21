@@ -56,6 +56,21 @@ function cardIds(root: ParentNode = container): string[] {
   return parseCards(root).map((c) => c.id);
 }
 
+/** The CSS `order` of a node as a number; unset (`''`) sorts last. */
+function cssOrderOf(el: HTMLElement): number {
+  const v = el.style.order;
+  return v === '' ? Number.POSITIVE_INFINITY : Number(v);
+}
+
+/** Card ids in VISUAL (applied) order: sorted by the CSS `order` the reorderer
+ *  sets, DOM index breaking ties. The reorderer never moves DOM nodes. */
+function appliedIds(root: ParentNode = container): string[] {
+  return parseCards(root)
+    .map((c, i) => ({ id: c.id, order: cssOrderOf(c.nodeRef as HTMLElement), i }))
+    .sort((a, b) => a.order - b.order || a.i - b.i)
+    .map((x) => x.id);
+}
+
 function getSquare(): HTMLElement {
   const el = document.body.querySelector('.ml-rerank-prefs');
   expect(el, 'collapsed square .ml-rerank-prefs is mounted').not.toBeNull();
@@ -387,18 +402,18 @@ describe('prefsPanel — zero-network on config change (Phase 6.3 invariant)', (
         onConfigChange: (next: RankConfig) => reorderer.updateConfig(next),
         initialConfig: RANK_CONFIG,
       });
-      reorderer.reorder(); // establish a baseline ranked order
+      reorderer.reorder(); // establish a baseline applied (default) order
 
       const economicos = presetToConfig('Económicos');
-      // Expected order derived from the CURRENT DOM right before the change
-      // (rank originalIndex tie-break is input-order sensitive).
+      // Expected applied order for the preset (DOM order never changes, so
+      // parseCards always sees ML's original order).
       const expected = rank(parseCards(container), economicos).map((c) => c.id);
-      expect(expected).not.toEqual(cardIds()); // sanity: preset reorders
+      expect(expected).not.toEqual(appliedIds()); // sanity: preset reorders
 
       panel.expand();
       getChip('Económicos').click();
 
-      expect(cardIds()).toEqual(expected); // re-ranked with the new config
+      expect(appliedIds()).toEqual(expected); // re-ranked with the new config
       expect(fetchSpy).not.toHaveBeenCalled(); // Pilar 1 zero-network preserved
     } finally {
       vi.unstubAllGlobals();
@@ -427,14 +442,14 @@ describe('prefsPanel — zero-network on config change (Phase 6.3 invariant)', (
         priorC: RANK_CONFIG.priorC,
       };
       const expected = rank(parseCards(container), sliderConfig).map((c) => c.id);
-      expect(expected).not.toEqual(cardIds()); // sanity: slider reorders
+      expect(expected).not.toEqual(appliedIds()); // sanity: slider reorders
 
       const w1 = getSlider('w1');
       w1.value = '1.5';
       w1.dispatchEvent(new Event('input', { bubbles: true }));
       vi.advanceTimersByTime(200); // fire the debounced onConfigChange
 
-      expect(cardIds()).toEqual(expected); // re-ranked
+      expect(appliedIds()).toEqual(expected); // re-ranked
       expect(fetchSpy).not.toHaveBeenCalled(); // zero network
     } finally {
       vi.useRealTimers();

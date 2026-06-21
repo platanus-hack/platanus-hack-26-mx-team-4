@@ -1,8 +1,8 @@
 // Reorderer tests — load the captured fixture, run the reorderer, and assert
-// the cards appear in descending ranking order and that reordering is
-// idempotent (no duplicate nodes / no observer loop). The MutationObserver
-// loop path is exercised with fake timers; per the task brief, a guard-flag +
-// no-loop assertion is sufficient (full async loop coverage is manual).
+// the cards appear in descending ranking ORDER via the CSS `order` property the
+// reorderer sets (the DOM is never moved — see observe.ts for why). Reordering
+// is idempotent (no repeated writes) and the MutationObserver only reacts to
+// EXTERNAL card additions, never to our own style writes (no childList churn).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
@@ -35,33 +35,50 @@ function freshFixture(): void {
   container = found!;
 }
 
+/** Card ids in DOM (querySelectorAll) order — the reorderer never changes this. */
 function cardIds(root: ParentNode = container): string[] {
   return parseCards(root).map((c) => c.id);
+}
+
+/** The CSS `order` of a node as a number; unset (`''`) sorts last. */
+function cssOrderOf(el: HTMLElement): number {
+  const v = el.style.order;
+  return v === '' ? Number.POSITIVE_INFINITY : Number(v);
+}
+
+/**
+ * Card ids in VISUAL (applied) order: sort by the CSS `order` we set, breaking
+ * ties by DOM index. When every `order` is cleared, this equals the DOM order
+ * (i.e. ML's original served order).
+ */
+function appliedIds(root: ParentNode = container): string[] {
+  return parseCards(root)
+    .map((c, i) => ({ id: c.id, order: cssOrderOf(c.nodeRef as HTMLElement), i }))
+    .sort((a, b) => a.order - b.order || a.i - b.i)
+    .map((x) => x.id);
 }
 
 describe('reorderer — fixture-grounded', () => {
   beforeEach(() => freshFixture());
 
   describe('reorder (synchronous, no observer)', () => {
-    it('re-appends the existing card nodes into descending ranking order', () => {
+    it('assigns style.order so cards appear in descending ranking order (no DOM move)', () => {
+      const originalDom = cardIds();
       const expectedRankedIds = rank(parseCards(container), RANK_CONFIG).map((c) => c.id);
 
       createReorderer(container).reorder();
 
-      expect(cardIds()).toEqual(expectedRankedIds);
+      expect(appliedIds()).toEqual(expectedRankedIds); // visual order = ranked
+      expect(cardIds()).toEqual(originalDom); // DOM order untouched
     });
 
-    it('moves the SAME node references (in-place, no clone)', () => {
+    it('does NOT move DOM nodes (same refs, same DOM positions)', () => {
       const before = parseCards(container).map((c) => c.nodeRef);
       createReorderer(container).reorder();
       const after = parseCards(container).map((c) => c.nodeRef);
 
       expect(after).toHaveLength(before.length);
-      expect(new Set(after).size).toBe(before.length);
-      // Reference equality (Set.has uses ===). Avoids vitest's deep-equality
-      // walker on DOM nodes, which trips jsdom's opaque-origin localStorage.
-      const beforeSet = new Set(before);
-      for (const node of after) expect(beforeSet.has(node)).toBe(true);
+      for (let i = 0; i < before.length; i++) expect(after[i]).toBe(before[i]);
     });
 
     it('keeps all 60 cards (no loss, no duplication)', () => {
@@ -78,17 +95,17 @@ describe('reorderer — fixture-grounded', () => {
       for (const row of rows) expect(row.getAttribute('data-ml-reranked')).toBe('1');
     });
 
-    it('is idempotent: a second run with the same ranking leaves the DOM unchanged', () => {
+    it('is idempotent: a second run writes no new order values', () => {
       const reorderer = createReorderer(container);
       reorderer.reorder();
-      const orderAfterFirst = cardIds();
+      const orderAfterFirst = appliedIds();
+      const stylesAfterFirst = parseCards(container).map((c) => (c.nodeRef as HTMLElement).style.order);
 
       reorderer.reorder();
-      const orderAfterSecond = cardIds();
 
-      expect(orderAfterSecond).toEqual(orderAfterFirst);
-      expect(parseCards(container)).toHaveLength(60);
-      expect(new Set(orderAfterSecond).size).toBe(60);
+      expect(appliedIds()).toEqual(orderAfterFirst);
+      const stylesAfterSecond = parseCards(container).map((c) => (c.nodeRef as HTMLElement).style.order);
+      expect(stylesAfterSecond).toEqual(stylesAfterFirst);
     });
 
     it('is a no-op on an empty container', () => {
@@ -103,39 +120,39 @@ describe('reorderer — fixture-grounded', () => {
   describe('MutationObserver — loop avoidance', () => {
     afterEach(() => vi.useRealTimers());
 
-    it('does not loop on its own re-append writes (guard + tag-skip + idempotency)', async () => {
+    it('does not loop on its own writes (style changes never touch childList)', async () => {
       vi.useFakeTimers();
       const expectedRankedIds = rank(parseCards(container), RANK_CONFIG).map((c) => c.id);
 
       const reorderer = createReorderer(container);
       reorderer.start();
-      reorderer.reorder(); // writes -> queues a childList mutation
+      reorderer.reorder(); // sets style.order only -> NO childList mutation -> observer idle
 
-      // Flush the observer microtask + the 250ms debounce window. If the guard
-      // failed, our own writes would schedule a reorder that writes again ->
-      // runaway. Idempotency + tag-skip make the callback a no-op instead.
+      // Flush the observer microtask + the 250ms debounce. With no node moves
+      // there is nothing for the childList observer to react to, so no runaway.
       await vi.advanceTimersByTimeAsync(300);
 
       const after = parseCards(container);
       expect(after).toHaveLength(60);
-      expect(new Set(after.map((c) => c.nodeRef)).size).toBe(60);
-      expect(cardIds()).toEqual(expectedRankedIds);
+      expect(appliedIds()).toEqual(expectedRankedIds);
 
       reorderer.destroy();
     });
 
-    it('re-ranks when an external untagged card is added (Ver mas simulation)', async () => {
+    it('re-ranks when an external card is added (Ver mas simulation)', async () => {
       vi.useFakeTimers();
       const reorderer = createReorderer(container);
       reorderer.start();
       reorderer.reorder();
       await vi.advanceTimersByTimeAsync(300); // settle initial reorder
 
-      // Simulate "Ver mas": append a NEW untagged card row (deep clone of an
-      // existing one so the adapter can still parse its signals).
+      // Simulate "Ver mas": append a NEW card row (deep clone of an existing one
+      // so the adapter can parse its signals). Clear any copied order so it
+      // starts unranked.
       const clone = container
         .querySelector('li.ui-search-layout__item')!
         .cloneNode(true) as HTMLElement;
+      clone.style.order = '';
       container.appendChild(clone);
 
       await vi.advanceTimersByTimeAsync(300); // observer -> debounced reorder
@@ -143,6 +160,8 @@ describe('reorderer — fixture-grounded', () => {
       const after = parseCards(container);
       expect(after).toHaveLength(61); // new card incorporated, not duplicated
       expect(new Set(after.map((c) => c.nodeRef)).size).toBe(61);
+      // The new card was folded into the ranking (it received an order value).
+      expect(clone.style.order).not.toBe('');
 
       reorderer.destroy();
     });
@@ -167,24 +186,25 @@ describe('reorderer — fixture-grounded', () => {
       const clone = container
         .querySelector('li.ui-search-layout__item')!
         .cloneNode(true) as HTMLElement;
+      clone.style.order = '';
       container.appendChild(clone);
       await vi.advanceTimersByTimeAsync(300); // would re-rank if still observing
 
+      // Observer stopped -> reorder never ran -> the clone never got an order.
+      expect(clone.style.order).toBe('');
       const rows = Array.from(container.querySelectorAll('li.ui-search-layout__item'));
-      // Observer stopped -> no reorder ran -> the clone stays where we put it
-      // (last), instead of being moved to its ranked position.
       expect(rows).toHaveLength(61);
-      expect(rows[rows.length - 1]).toBe(clone);
+      expect(rows[rows.length - 1]).toBe(clone); // still last in DOM (never moved)
 
       reorderer.destroy();
     });
   });
 });
 
-// Phase 4 — RerankController.updateConfig: re-rank the CURRENT DOM with a new
-// config using the existing reorder pipeline, with ZERO network calls. The
+// Phase 4 — RerankController.updateConfig: re-apply order to the CURRENT DOM
+// with a new config using the existing pipeline, with ZERO network calls. The
 // toggle owns the observe lifecycle, so updateConfig must NOT start/stop the
-// observer. Idempotency is preserved (a no-op when the DOM is already ranked).
+// observer. Idempotency is preserved (a no-op when the order is already applied).
 describe('updateConfig — zero-network re-rank of current DOM', () => {
   // A config that emphasizes price strongly and drops the sponsored penalty,
   // producing an order distinct from the default RANK_CONFIG on the fixture.
@@ -196,35 +216,32 @@ describe('updateConfig — zero-network re-rank of current DOM', () => {
   it('createReorderer(container) with no config still defaults to RANK_CONFIG (backward compatible)', () => {
     const expected = rank(parseCards(container), RANK_CONFIG).map((c) => c.id);
     createReorderer(container).reorder();
-    expect(cardIds()).toEqual(expected);
+    expect(appliedIds()).toEqual(expected);
   });
 
-  it('updateConfig(next) re-ranks the CURRENT DOM with the new config (weight change reorders)', () => {
+  it('updateConfig(next) re-applies order with the new config (weight change reorders)', () => {
     const defaultOrder = rank(parseCards(container), RANK_CONFIG).map((c) => c.id);
     const reorderer = createReorderer(container);
     reorderer.reorder();
-    expect(cardIds()).toEqual(defaultOrder);
+    expect(appliedIds()).toEqual(defaultOrder);
 
-    // Compute the expected PRICE_HEAVY order from the CURRENT DOM (i.e. after the
-    // default reorder), exactly as updateConfig will. rank() is order-sensitive
-    // only via the originalIndex tie-break, so the expected must be derived from
-    // the same input order the implementation sees at updateConfig time.
+    // The DOM order never changes, so parseCards always sees ML's original order
+    // (the rank originalIndex tie-break is therefore stable across configs).
     const expectedAfterUpdate = rank(parseCards(container), PRICE_HEAVY).map((c) => c.id);
     expect(expectedAfterUpdate).not.toEqual(defaultOrder); // sanity: weight change reorders
 
     reorderer.updateConfig(PRICE_HEAVY);
-    expect(cardIds()).toEqual(expectedAfterUpdate); // re-ranked with the new config
+    expect(appliedIds()).toEqual(expectedAfterUpdate);
   });
 
   it('updateConfig merges defaults for missing fields (partial config)', () => {
-    // Only w4 overridden; the rest must come from RANK_CONFIG defaults.
     const partial = { w4: 1.5 } as RankConfig;
     const merged: RankConfig = { ...RANK_CONFIG, w4: 1.5 };
     const expected = rank(parseCards(container), merged).map((c) => c.id);
 
     const reorderer = createReorderer(container);
     reorderer.updateConfig(partial);
-    expect(cardIds()).toEqual(expected);
+    expect(appliedIds()).toEqual(expected);
   });
 
   it('updateConfig makes ZERO network calls (Pilar 1 no-network invariant)', () => {
@@ -245,38 +262,32 @@ describe('updateConfig — zero-network re-rank of current DOM', () => {
   it('updateConfig is idempotent: applying the same config twice writes nothing the second time', () => {
     const reorderer = createReorderer(container);
     reorderer.updateConfig(PRICE_HEAVY);
-    const afterFirst = cardIds();
+    const afterFirst = appliedIds();
 
     reorderer.updateConfig(PRICE_HEAVY);
-    expect(cardIds()).toEqual(afterFirst);
+    expect(appliedIds()).toEqual(afterFirst);
     expect(parseCards(container)).toHaveLength(60);
   });
 
   it('updateConfig does NOT start the observer (a not-started controller stays not-observing)', async () => {
     vi.useFakeTimers();
     const reorderer = createReorderer(container); // not started
-    reorderer.updateConfig(PRICE_HEAVY); // re-ranks once, synchronously
-    const nodesBefore = parseCards(container).map((c) => c.nodeRef); // 60 in PRICE_HEAVY order
+    reorderer.updateConfig(PRICE_HEAVY); // applies order once, synchronously
 
-    // Append an untagged card. Since the observer was never started, no
-    // debounced re-rank should run, even after the debounce window elapses.
-    // (Strip the inherited data-ml-reranked tag so this is a true external add,
-    // not a self-re-append the observer would skip.)
+    const originalRows = Array.from(container.children) as HTMLElement[];
+    const ordersBefore = originalRows.map((r) => r.style.order);
+
+    // Append a fresh card. Since the observer was never started, no debounced
+    // re-rank should run, even after the debounce window elapses.
     const clone = container.querySelector('li.ui-search-layout__item')!.cloneNode(true) as HTMLElement;
-    clone.removeAttribute('data-ml-reranked');
+    clone.style.order = '';
     container.appendChild(clone);
     await vi.advanceTimersByTimeAsync(400);
 
-    const rows = Array.from(container.querySelectorAll('li.ui-search-layout__item'));
-    expect(rows).toHaveLength(61);
-    // Observer never started -> the clone stays where we put it (last)...
-    expect(rows[rows.length - 1]).toBe(clone);
-    // ...and the original 60 keep their updateConfig order untouched (ref-equal,
-    // index-for-index; avoids vitest deep-equality on DOM nodes).
-    expect(rows.slice(0, 60).length).toBe(nodesBefore.length);
-    for (let i = 0; i < nodesBefore.length; i++) {
-      expect(rows[i]).toBe(nodesBefore[i]);
-    }
+    // Observer never started -> the clone never got an order...
+    expect(clone.style.order).toBe('');
+    // ...and the original rows keep their updateConfig order untouched.
+    originalRows.forEach((r, i) => expect(r.style.order).toBe(ordersBefore[i]));
   });
 
   it('updateConfig does NOT stop a running observer (external adds still re-rank)', async () => {
@@ -289,40 +300,33 @@ describe('updateConfig — zero-network re-rank of current DOM', () => {
     reorderer.updateConfig(PRICE_HEAVY); // re-rank with new config; must NOT stop observer
     await vi.advanceTimersByTimeAsync(300); // settle the updateConfig reorder
 
-    // External untagged add -> observer still alive -> re-ranks (clone moves).
-    // (Strip the inherited tag so the observer treats the clone as external.)
+    // External add -> observer still alive -> re-ranks (clone gets an order).
     const clone = container.querySelector('li.ui-search-layout__item')!.cloneNode(true) as HTMLElement;
-    clone.removeAttribute('data-ml-reranked');
-    container.appendChild(clone); // appended last
+    clone.style.order = '';
+    container.appendChild(clone); // appended last in DOM
     await vi.advanceTimersByTimeAsync(400); // observer -> debounced reorder
 
     const after = parseCards(container);
     expect(after).toHaveLength(61);
     expect(new Set(after.map((c) => c.nodeRef)).size).toBe(61);
-    const rows = Array.from(container.querySelectorAll('li.ui-search-layout__item'));
-    // The clone was re-ranked off the last position -> observer ran -> not stopped.
-    expect(rows[rows.length - 1]).not.toBe(clone);
+    // The clone was folded into the ranking -> observer ran -> not stopped.
+    expect(clone.style.order).not.toBe('');
 
     reorderer.destroy();
   });
 });
 
 // Phase 6.1 — cross-cutting invariant (spec: "Toggle restore remains exact"):
-// a prefs-driven re-rank (updateConfig) must NOT corrupt the toggle's original-
-// order snapshot. Turning the toggle OFF after a config change still restores
-// the EXACT MercadoLibre-served order. updateConfig reuses reorder() and never
-// touches toggle.ts's originalOrder WeakMap, so the snapshot is structurally
-// isolated; this test pins that invariant against future regressions.
+// a prefs-driven re-rank (updateConfig) must NOT corrupt the toggle's restore.
+// Turning the toggle OFF after a config change still restores the EXACT
+// MercadoLibre-served order. Restore is just clearing the CSS `order` the
+// reorderer set (the DOM was never moved), so it is structurally exact.
 describe('cross-cutting: toggle OFF restores exact order after prefs-driven reorder (Phase 6.1)', () => {
-  // A price-heavy config that produces an order distinct from RANK_CONFIG on the
-  // fixture (same one used by the updateConfig block above).
   const PRICE_HEAVY: RankConfig = { w1: 0.05, w2: 2.0, w3: 0.0, w4: 0.05, priorC: 5 };
 
   beforeEach(() => freshFixture());
 
   afterEach(() => {
-    // The toggle pill is appended to the GLOBAL document.body; clean it and the
-    // persisted toggle state so nothing leaks between tests.
     document.body.innerHTML = '';
     try {
       localStorage.removeItem('ml-rerank:enabled');
@@ -332,27 +336,25 @@ describe('cross-cutting: toggle OFF restores exact order after prefs-driven reor
   });
 
   it('toggle OFF restores the EXACT original ML order after updateConfig re-ranks the DOM', () => {
-    const original = cardIds(); // ML's true served order, captured before mount
+    const original = cardIds(); // ML's true served order (DOM order, never changes)
 
     const reorderer = createReorderer(container);
     const toggle = mountToggle(container, reorderer);
 
     // ON -> ranked order (distinct from original).
     toggle.on();
-    const onOrder = cardIds();
+    const onOrder = appliedIds();
     expect(onOrder).not.toEqual(original);
 
-    // Prefs-driven re-rank: a new config reorders the CURRENT (already ranked)
-    // DOM. Expected order is derived from the DOM state right before the change
-    // (rank originalIndex tie-break is input-order sensitive).
+    // Prefs-driven re-rank with a new config.
     const expectedAfterUpdate = rank(parseCards(container), PRICE_HEAVY).map((c) => c.id);
     expect(expectedAfterUpdate).not.toEqual(onOrder); // sanity: config change reorders
     reorderer.updateConfig(PRICE_HEAVY);
-    expect(cardIds()).toEqual(expectedAfterUpdate);
+    expect(appliedIds()).toEqual(expectedAfterUpdate);
 
-    // OFF must restore the EXACT original order — updateConfig never touched the
-    // toggle's snapshot, so restoreOriginal() replays ML's true served order.
+    // OFF clears the order -> visual order returns to ML's true served order.
     toggle.off();
+    expect(appliedIds()).toEqual(original);
     expect(cardIds()).toEqual(original);
 
     toggle.destroy();
@@ -368,13 +370,13 @@ describe('cross-cutting: toggle OFF restores exact order after prefs-driven reor
     reorderer.updateConfig(RANK_CONFIG);
     reorderer.updateConfig({ w1: 1.0, w2: 0.1, w3: 0.4, w4: 0.1, priorC: 5 });
     toggle.off();
-    expect(cardIds()).toEqual(original);
+    expect(appliedIds()).toEqual(original);
 
     // A second cycle after several config swaps still restores exactly.
     toggle.on();
     reorderer.updateConfig(PRICE_HEAVY);
     toggle.off();
-    expect(cardIds()).toEqual(original);
+    expect(appliedIds()).toEqual(original);
 
     toggle.destroy();
   });

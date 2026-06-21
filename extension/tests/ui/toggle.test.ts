@@ -46,6 +46,24 @@ function cardIds(root: ParentNode = container): string[] {
   return parseCards(root).map((c) => c.id);
 }
 
+/** The CSS `order` of a node as a number; unset (`''`) sorts last. */
+function cssOrderOf(el: HTMLElement): number {
+  const v = el.style.order;
+  return v === '' ? Number.POSITIVE_INFINITY : Number(v);
+}
+
+/**
+ * Card ids in VISUAL (applied) order: sorted by the CSS `order` the reorderer
+ * sets, DOM index breaking ties. When OFF clears every `order`, this equals the
+ * DOM order (ML's original served order).
+ */
+function appliedIds(root: ParentNode = container): string[] {
+  return parseCards(root)
+    .map((c, i) => ({ id: c.id, order: cssOrderOf(c.nodeRef as HTMLElement), i }))
+    .sort((a, b) => a.order - b.order || a.i - b.i)
+    .map((x) => x.id);
+}
+
 /** Clear persisted toggle state so it never leaks between tests. Safe when the
  *  global localStorage accessor was temporarily stubbed to throw (no-op). */
 function clearPersistedState(): void {
@@ -81,7 +99,7 @@ describe('toggle UI — fixture-grounded', () => {
   it('starts OFF and leaves the original order untouched at mount', () => {
     const original = cardIds();
     expect(toggle.isOn()).toBe(false);
-    expect(cardIds()).toEqual(original);
+    expect(appliedIds()).toEqual(original);
   });
 
   it('ON applies the ranked order and flips the pill state', () => {
@@ -90,7 +108,7 @@ describe('toggle UI — fixture-grounded', () => {
     toggle.on();
 
     expect(toggle.isOn()).toBe(true);
-    expect(cardIds()).toEqual(expectedRankedIds);
+    expect(appliedIds()).toEqual(expectedRankedIds); // visual order = ranked
     const pill = document.body.querySelector('.ml-rerank-toggle')!;
     expect(pill.getAttribute('data-ml-rerank-state')).toBe('on');
     expect(pill.getAttribute('aria-pressed')).toBe('true');
@@ -98,14 +116,14 @@ describe('toggle UI — fixture-grounded', () => {
   });
 
   it('OFF restores the EXACT original order captured at mount (incl. ties & sponsored)', () => {
-    const original = cardIds(); // captured at mount, before any reorder
+    const original = cardIds(); // ML's true served order (DOM order, never changes)
 
     toggle.on();
-    expect(cardIds()).not.toEqual(original); // ranking changed the order
+    expect(appliedIds()).not.toEqual(original); // ranking changed the visual order
 
     toggle.off();
     expect(toggle.isOn()).toBe(false);
-    expect(cardIds()).toEqual(original); // exact restore
+    expect(appliedIds()).toEqual(original); // exact restore (order cleared)
   });
 
   it('ON -> OFF -> ON is stable across cycles', () => {
@@ -113,13 +131,13 @@ describe('toggle UI — fixture-grounded', () => {
     const ranked = rank(parseCards(container), RANK_CONFIG).map((c) => c.id);
 
     toggle.on();
-    expect(cardIds()).toEqual(ranked);
+    expect(appliedIds()).toEqual(ranked);
     toggle.off();
-    expect(cardIds()).toEqual(original);
+    expect(appliedIds()).toEqual(original);
     toggle.on();
-    expect(cardIds()).toEqual(ranked);
+    expect(appliedIds()).toEqual(ranked);
     toggle.off();
-    expect(cardIds()).toEqual(original);
+    expect(appliedIds()).toEqual(original);
   });
 
   it('destroy() removes the pill and restores the original order', () => {
@@ -128,7 +146,7 @@ describe('toggle UI — fixture-grounded', () => {
     toggle.destroy();
 
     expect(document.body.querySelector('.ml-rerank-toggle')).toBeNull();
-    expect(cardIds()).toEqual(original);
+    expect(appliedIds()).toEqual(original);
   });
 });
 
@@ -151,7 +169,7 @@ describe('toggle state persistence across pagination', () => {
     const t = mountToggle(container, createReorderer(container));
 
     expect(t.isOn()).toBe(true);
-    expect(cardIds()).toEqual(ranked); // auto-applied ranked order
+    expect(appliedIds()).toEqual(ranked); // auto-applied ranked order
     const pill = document.body.querySelector('.ml-rerank-toggle')!;
     expect(pill.getAttribute('data-ml-rerank-state')).toBe('on');
     expect(pill.getAttribute('aria-pressed')).toBe('true');
@@ -166,11 +184,11 @@ describe('toggle state persistence across pagination', () => {
     localStorage.setItem(STORAGE_KEY, 'on');
     const t = mountToggle(container, createReorderer(container));
     expect(t.isOn()).toBe(true);
-    expect(cardIds()).toEqual(ranked); // auto-applied
+    expect(appliedIds()).toEqual(ranked); // auto-applied
 
     t.off();
     expect(t.isOn()).toBe(false);
-    expect(cardIds()).toEqual(original); // exact restore of ML's true original order
+    expect(appliedIds()).toEqual(original); // exact restore of ML's true original order
     t.destroy();
   });
 
@@ -180,13 +198,13 @@ describe('toggle state persistence across pagination', () => {
 
     const t = mountToggle(container, createReorderer(container));
     expect(t.isOn()).toBe(false);
-    expect(cardIds()).toEqual(original); // untouched
+    expect(appliedIds()).toEqual(original); // untouched
     t.destroy();
 
     localStorage.setItem(STORAGE_KEY, 'off');
     const t2 = mountToggle(container, createReorderer(container));
     expect(t2.isOn()).toBe(false);
-    expect(cardIds()).toEqual(original); // still untouched
+    expect(appliedIds()).toEqual(original); // still untouched
     t2.destroy();
   });
 

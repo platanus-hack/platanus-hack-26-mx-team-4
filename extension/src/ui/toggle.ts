@@ -1,9 +1,13 @@
 // Toggle UI — injects a fixed, clearly-visible pill control that gates the
-// reorderer. The original card order is snapshotted at mount time (before any
-// re-ranking), stored per-container in a WeakMap. ON applies the ranked order
-// (delegates to the reorderer) and starts the observer; OFF stops the observer
-// and restores the EXACT snapshotted original order, including ties and
-// sponsored cards (spec: "Visible Toggle and Exact Restore").
+// reorderer. ON applies the ranked order (delegates to the reorderer, which sets
+// `style.order` on the cards) and starts the observer; OFF stops the observer
+// and restores the EXACT original order by CLEARING `style.order` on every card
+// row (spec: "Visible Toggle and Exact Restore").
+//
+// Because the reorderer never moves DOM nodes (it only sets the CSS `order`
+// property — see observe.ts for why), the DOM is always in MercadoLibre's true
+// served order. So restoring is just clearing the inline `order` we set; no
+// snapshot is needed, and the restore is exact even after ML/React re-renders.
 //
 // Styling lives in src/content.css (.ml-rerank-toggle). The pill is appended to
 // document.body with position:fixed and max z-index so it floats over ML's UI.
@@ -21,9 +25,6 @@ const RERANK_ATTR = 'data-ml-reranked';
  * full-page navigations ML uses for pagination (`..._Desde_N`).
  */
 const STORAGE_KEY = 'ml-rerank:enabled';
-
-/** Per-container snapshot of the original (pre-rerank) direct-children order. */
-const originalOrder = new WeakMap<HTMLElement, HTMLElement[]>();
 
 /**
  * Read the persisted toggle state. Returns `'off'` for any missing/unknown
@@ -66,20 +67,14 @@ export interface ToggleController {
 
 /**
  * Inject the re-rank toggle pill and wire it to `reorderer` operating on
- * `container`. The original order is snapshotted once, at mount, so OFF always
- * restores exactly what MercadoLibre served — regardless of any intermediate
- * ML reorders. Returns a controller for programmatic use (and tests).
+ * `container`. OFF restores exactly what MercadoLibre served by clearing the
+ * `style.order` the reorderer set — the DOM is never moved, so this is always
+ * exact. Returns a controller for programmatic use (and tests).
  */
 export function mountToggle(
   container: HTMLElement,
   reorderer: RerankController,
 ): ToggleController {
-  // Snapshot the exact original order BEFORE any re-ranking. Captured once, at
-  // mount, so OFF always restores what MercadoLibre originally served.
-  if (!originalOrder.has(container)) {
-    originalOrder.set(container, Array.from(container.children) as HTMLElement[]);
-  }
-
   const pill = document.createElement('button');
   pill.type = 'button';
   pill.className = 'ml-rerank-toggle';
@@ -103,12 +98,11 @@ export function mountToggle(
     text.textContent = `Re-rank: ${state.toUpperCase()}`;
   }
 
-  /** Re-append the snapshotted nodes in original order (in place, no clone). */
+  /** Clear the CSS `order` we set on every card row, returning the list to ML's
+   *  true served order (the DOM was never moved, so this is exact). */
   function restoreOriginal(): void {
-    const snapshot = originalOrder.get(container);
-    if (!snapshot) return;
-    for (const node of snapshot) {
-      container.appendChild(node);
+    for (const node of Array.from(container.children) as HTMLElement[]) {
+      if (node.style.order !== '') node.style.order = '';
       if (node.hasAttribute(RERANK_ATTR)) node.removeAttribute(RERANK_ATTR);
     }
   }
@@ -139,14 +133,13 @@ export function mountToggle(
   function destroy(): void {
     // Teardown is NOT a user toggle action, so do NOT persist 'off' here —
     // writing 'off' would silently clear the cross-page persistence a user left
-    // enabled. Restore the original order, stop the observer, drop the snapshot,
-    // and remove the pill. (In production the pill lives for the whole page
-    // session; this is mainly used by tests / explicit cleanup.)
+    // enabled. Restore the original order (clear `style.order`), stop the
+    // observer, and remove the pill. (In production the pill lives for the whole
+    // page session; this is mainly used by tests / explicit cleanup.)
     reorderer.stop();
     restoreOriginal();
     state = 'off';
     pill.remove();
-    originalOrder.delete(container);
   }
 
   pill.addEventListener('click', toggle);

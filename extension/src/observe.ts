@@ -1,21 +1,23 @@
-// Reorderer + debounced MutationObserver — idempotent in-place re-append of
-// existing card nodes inside the results container.
+// Reorderer + debounced MutationObserver — reorders the results list by setting
+// the CSS `order` property on each card row (NOT by moving DOM nodes).
 //
-// Pipeline: adapter.parseCards -> ranking.rank -> re-append the existing card
-// DOM nodes (the <li> rows) into ranked order. No cloning, no shell
-// replacement: the SAME node references are moved within the SAME container, so
-// MercadoLibre's own handlers, event listeners, and lazy-load state stay intact.
+// WHY CSS order (and not appendChild): MercadoLibre's listing is a React app. If
+// we physically re-append the <li> rows, React's reconciler puts them back in
+// its own order on the next render, so the re-rank visibly "snaps back". Setting
+// `style.order` on the existing grid items reorders them VISUALLY without
+// touching the DOM structure React owns, so React leaves it alone. The container
+// (`ol.ui-search-layout--grid`) is a CSS grid, whose items honor `order`.
 //
-// Loop avoidance (three layers, per design section 7):
-//   1. Re-entrancy guard `isReordering` set true around DOM writes — defense in
-//      depth against any synchronous re-entry.
-//   2. `data-ml-reranked="1"` stamped on every moved node; the observer skips
-//      mutations whose added nodes are all already tagged (i.e. our own
-//      re-append), so a "Ver mas" load (untagged new nodes) is what re-triggers.
-//   3. ~250ms debounce coalesces bursts, and `reorder()` itself is idempotent:
-//      when the DOM is already in ranked order it writes nothing, so any
-//      callback that does slip through re-ranks to the same order -> no new
-//      mutation -> no loop.
+// Pipeline: adapter.parseCards -> ranking.rank -> assign `style.order` to each
+// card row by its ranked position. Non-card rows (ads / separators) are pushed
+// to the end. Restoring the original order is just clearing `style.order` (the
+// DOM was never reordered), which the toggle does on OFF.
+//
+// Loop avoidance is now structural: our writes only set inline styles/attributes,
+// never add or remove children, so the childList MutationObserver never sees its
+// own work. The observer reacts ONLY to external card additions (e.g. "Ver mas",
+// pagination, or a React re-render that swaps in fresh nodes), re-applying order
+// to whatever is currently in the container (debounced ~250ms).
 
 import { parseCards } from './adapter/mercadolibre';
 import { rank } from './ranking/score';
@@ -23,41 +25,38 @@ import type { RankConfig } from './ranking/types';
 import { RANK_CONFIG } from './config';
 import { normalizePrefs } from './prefs/rankingPrefs';
 
-/** Attribute stamped on every card row once it has been moved by the reorderer. */
+/** Attribute stamped on every card row once it has been ordered by the reorderer. */
 const RERANK_ATTR = 'data-ml-reranked';
 /** MutationObserver debounce window (ms). */
 const DEBOUNCE_MS = 250;
 
 export interface RerankController {
-  /** Run parse -> rank -> re-append once. Idempotent: a no-op when the DOM is
-   *  already in ranked order, so it does not retrigger the observer. */
+  /** Parse -> rank -> assign `style.order` once. Idempotent: writes nothing when
+   *  every card already carries its target order. Never moves DOM nodes. */
   reorder(): void;
-  /** Begin watching the container childList; re-ranks (debounced) on external
-   *  card additions (e.g. "Ver mas"). Our own re-appends are skipped. */
+  /** Begin watching the container childList; re-applies order (debounced) on
+   *  external card additions (e.g. "Ver mas" / React re-render). */
   start(): void;
   /** Stop watching. Safe to call when already stopped. */
   stop(): void;
   /** Stop watching and mark the controller as destroyed (further calls no-op). */
   destroy(): void;
   /**
-   * Replace the active ranking config and re-rank the CURRENT DOM with it,
-   * reusing the existing parse -> rank -> re-append pipeline. ZERO network
-   * calls (Pilar 1 invariant). Does NOT start or stop the observer — the
-   * toggle owns the observe lifecycle; this only re-derives the order of the
-   * cards already in the container. `next` is normalized (missing/invalid
-   * fields merged from defaults, negatives clamped to 0) before use.
+   * Replace the active ranking config and re-apply order to the CURRENT DOM with
+   * it, reusing the parse -> rank -> order pipeline. ZERO network calls (Pilar 1
+   * invariant). Does NOT start or stop the observer — the toggle owns the observe
+   * lifecycle. `next` is normalized (missing/invalid fields merged from defaults,
+   * negatives clamped to 0) before use.
    */
   updateConfig(next: RankConfig): void;
 }
 
 /**
  * Create a reorderer bound to `container`. Observation is NOT started; call
- * `start()` (or let the toggle do it) to react to live DOM changes. The
- * content script creates this and hands it to the toggle, which gates
- * `start()`/`stop()` on the ON/OFF state per design section 7.
+ * `start()` (or let the toggle do it) to react to live DOM changes.
  *
  * `initialConfig` (default `RANK_CONFIG`) sets the active weights for the first
- * `reorder()`; `updateConfig(next)` swaps them later and re-ranks in place.
+ * `reorder()`; `updateConfig(next)` swaps them later and re-applies order.
  */
 export function createReorderer(
   container: HTMLElement,
@@ -65,7 +64,6 @@ export function createReorderer(
 ): RerankController {
   let observer: MutationObserver | null = null;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  let isReordering = false;
   let destroyed = false;
   // Normalize once on construction so a partial/invalid initial config is just
   // as safe as a later updateConfig. RANK_CONFIG normalizes to itself, so the
@@ -73,36 +71,29 @@ export function createReorderer(
   let currentConfig: RankConfig = normalizePrefs(initialConfig);
 
   function reorder(): void {
-    if (destroyed || isReordering) return;
+    if (destroyed) return;
 
     const cards = parseCards(container);
     if (cards.length === 0) return;
 
-    // `cards` is in current DOM order (querySelectorAll is document order);
-    // `ranked` is the same nodes in descending quality order.
+    // `cards` is in current DOM order; `ranked` is the same nodes by descending
+    // quality. Map each ranked card node to its target order index.
     const ranked = rank(cards, currentConfig);
-    const rankedNodes = ranked.map((c) => c.nodeRef);
-    const currentNodes = cards.map((c) => c.nodeRef);
+    const orderByNode = new Map<HTMLElement, number>();
+    ranked.forEach((c, i) => orderByNode.set(c.nodeRef as HTMLElement, i));
 
-    // Idempotency: if the DOM is already in ranked order, write nothing. This
-    // is what makes a second run (or an observer callback fired by our own
-    // writes) a no-op, so no mutation is emitted and no loop starts.
-    const alreadyRanked =
-      currentNodes.length === rankedNodes.length &&
-      currentNodes.every((node, i) => node === rankedNodes[i]);
-    if (alreadyRanked) return;
-
-    isReordering = true;
-    try {
-      // appendChild on an existing node MOVES it to the end of the container.
-      // Iterating in ranked order re-appends the same nodes into ranked order,
-      // in place. Tag every moved node as processed (observer skip signal).
-      for (const node of rankedNodes) {
-        container.appendChild(node);
-        node.setAttribute(RERANK_ATTR, '1');
-      }
-    } finally {
-      isReordering = false;
+    // Assign `style.order` to every direct child: ranked cards get their rank
+    // index; non-card rows (ads/separators parseCards skipped) are pushed after
+    // the ranked cards in their original relative order. We only WRITE when the
+    // value actually changes, so a second run with the same ranking is a no-op
+    // (idempotent) and never thrashes layout.
+    const nonCardBase = ranked.length;
+    let nonCardOffset = 0;
+    for (const child of Array.from(container.children) as HTMLElement[]) {
+      const target = orderByNode.has(child) ? orderByNode.get(child)! : nonCardBase + nonCardOffset++;
+      const targetStr = String(target);
+      if (child.style.order !== targetStr) child.style.order = targetStr;
+      if (child.getAttribute(RERANK_ATTR) !== '1') child.setAttribute(RERANK_ATTR, '1');
     }
   }
 
@@ -114,26 +105,24 @@ export function createReorderer(
     }, DEBOUNCE_MS);
   }
 
-  function isTagged(node: Node): boolean {
-    return node.nodeType === 1 && (node as Element).hasAttribute(RERANK_ATTR);
-  }
-
-  // Ignore mutations that are entirely our own tagged-node re-appends; only
-  // external additions (untagged new cards, e.g. "Ver mas") re-trigger.
+  // React ONLY to external card additions. Our own work sets inline styles /
+  // attributes and never adds or removes children, so it can never trigger this
+  // childList observer — no guard flag or tag-skip needed. A "Ver mas" load or a
+  // React re-render swaps in fresh element nodes, which is what re-triggers.
   const callback: MutationCallback = (records) => {
-    if (isReordering || destroyed) return;
-    const hasExternalChange = records.some((record) =>
-      Array.from(record.addedNodes).some((node) => !isTagged(node)),
+    if (destroyed) return;
+    const addedElement = records.some((record) =>
+      Array.from(record.addedNodes).some((node) => node.nodeType === 1),
     );
-    if (!hasExternalChange) return;
+    if (!addedElement) return;
     scheduleReorder();
   };
 
   function start(): void {
     if (destroyed || observer) return;
     observer = new MutationObserver(callback);
-    // childList only (no subtree): we react to card rows being added/removed
-    // at the container level, not to noise inside individual cards.
+    // childList only (no subtree): we react to card rows being added/removed at
+    // the container level, not to noise inside individual cards.
     observer.observe(container, { childList: true });
   }
 
@@ -153,12 +142,6 @@ export function createReorderer(
     destroyed = true;
   }
 
-  /**
-   * Swap the active config (normalized) and re-rank the current DOM with it.
-   * Reuses `reorder()`, so it inherits idempotency and zero-network behavior.
-   * Does NOT touch the observer — the toggle owns start/stop (design: runtime
-   * updates via a mutable config, not a recreated observer).
-   */
   function updateConfig(next: RankConfig): void {
     if (destroyed) return;
     currentConfig = normalizePrefs(next);
