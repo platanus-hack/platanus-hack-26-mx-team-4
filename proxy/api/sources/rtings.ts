@@ -302,6 +302,71 @@ function metaTitle(html: string): string | null {
   return m ? decodeEntities(stripTags(m[1])).replace(/\s+-\s+RTINGS\.com$/i, '').trim() : null;
 }
 
+function capText(s: string, max = 700): string {
+  const clean = decodeEntities(stripTags(s)).replace(/\s+/g, ' ').trim();
+  return clean.length > max ? clean.slice(0, max - 1).trimEnd() + '…' : clean;
+}
+
+function uniqueText(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items.map((s) => capText(s, 220)).filter(Boolean)) {
+    const key = normalizeText(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Extract public RTINGS verdict details embedded in the page props.
+ * Current RTINGS pages expose concise "summaries" (pros/cons) and per-usage
+ * verdict paragraphs as HTML-escaped JSON inside data-props. We do not need the
+ * paywalled numeric scores: the public blurbs are enough to give Gemini a
+ * richer expert source.
+ */
+export function extractVerdictDetails(html: string): { pros: string[]; cons: string[]; usageAnalyses: string[] } {
+  const pros: string[] = [];
+  const cons: string[] = [];
+
+  const summaryRe =
+    /\{&quot;id&quot;:&quot;[^&]+&quot;,&quot;priority&quot;:(-?\d+),&quot;order&quot;:\d+,&quot;blurb&quot;:&quot;([\s\S]*?)&quot;,&quot;title&quot;/g;
+  let summary: RegExpExecArray | null;
+  while ((summary = summaryRe.exec(html)) !== null) {
+    const priority = Number(summary[1]);
+    const blurb = summary[2];
+    if (priority > 0) pros.push(blurb);
+    if (priority < 0) cons.push(blurb);
+  }
+
+  const usageAnalyses: string[] = [];
+  const ratingRe =
+    /&quot;linked_description&quot;:&quot;([\s\S]*?)&quot;,&quot;usage&quot;:\{&quot;id&quot;:&quot;[^&]+&quot;,&quot;original_id&quot;:&quot;[^&]+&quot;,&quot;name&quot;:&quot;([\s\S]*?)&quot;,&quot;kind&quot;:&quot;(usage|performance)&quot;/g;
+  let rating: RegExpExecArray | null;
+  while ((rating = ratingRe.exec(html)) !== null && usageAnalyses.length < 5) {
+    const description = capText(rating[1], 520);
+    const usageName = capText(rating[2], 80);
+    if (description && usageName) usageAnalyses.push(`${usageName}: ${description}`);
+  }
+
+  return {
+    pros: uniqueText(pros).slice(0, 5),
+    cons: uniqueText(cons).slice(0, 5),
+    usageAnalyses: uniqueText(usageAnalyses).slice(0, 5),
+  };
+}
+
+function buildExpertReviewText(title: string, baseText: string, details: ReturnType<typeof extractVerdictDetails>): string {
+  const sections = [`Titulo RTINGS: ${title}.`, `Resumen editorial: ${capText(baseText, 900)}`];
+  if (details.pros.length > 0) sections.push(`Pros destacados: ${details.pros.join(' | ')}`);
+  if (details.cons.length > 0) sections.push(`Contras destacados: ${details.cons.join(' | ')}`);
+  if (details.usageAnalyses.length > 0) {
+    sections.push(`Analisis por uso: ${details.usageAnalyses.join(' || ')}`);
+  }
+  return sections.join('\n');
+}
+
 /** Pull the canonical URL of the review page. */
 function canonicalUrl(html: string): string | null {
   const m = /<link\b[^>]*rel="canonical"[^>]*href="([^"]+)"/i.exec(html);
@@ -330,12 +395,13 @@ export function parseReviewPage(html: string, pageUrl?: string): NormalizedAnaly
     const title = metaTitle(html);
     const description = metaDescription(html);
     if (!title || !description) return empty;
+    const details = extractVerdictDetails(html);
     return {
       sourceId: RTINGS_SOURCE_ID,
       sourceLabel: RTINGS_LABEL,
       sourceUrl: url,
       productMatched: true,
-      reviews: [{ rating: null, text: `${title}. ${description}`, kind: 'expert' }],
+      reviews: [{ rating: null, text: buildExpertReviewText(title, description, details), kind: 'expert' }],
     };
   }
 
@@ -350,7 +416,8 @@ export function parseReviewPage(html: string, pageUrl?: string): NormalizedAnaly
       : null;
 
   const body = (typeof review.reviewBody === 'string' && review.reviewBody.trim()) || metaDescription(html) || '';
-  const text = decodeEntities(body).trim();
+  const details = extractVerdictDetails(html);
+  const text = buildExpertReviewText(product.name, body, details);
   if (text.length === 0) {
     // A Product block with no usable editorial text is not summarizable.
     return { ...empty, productMatched: false };

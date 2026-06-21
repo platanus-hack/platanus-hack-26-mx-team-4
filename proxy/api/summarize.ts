@@ -125,10 +125,16 @@ export function buildPrompt(request: ProxyRequest, expert = false): string {
     sourceLabel,
     reviewLines.join('\n'),
     ``,
-    `Resumí ${expert ? 'el análisis' : 'las opiniones'} en JSON con tres campos:`,
-    `- strongPoints: lista de strings con los puntos a favor.`,
-    `- weakPoints: lista de strings con los puntos en contra / defectos.`,
-    `- verdict: un veredicto breve y claro sobre el producto.`,
+    `Resumi ${expert ? 'el analisis' : 'las opiniones'} en JSON con tres campos:`,
+    expert
+      ? `- strongPoints: 3 a 5 strings concretos con ventajas, usos destacados y aspectos donde rinde bien.`
+      : `- strongPoints: lista de strings con los puntos a favor.`,
+    expert
+      ? `- weakPoints: 3 a 5 strings concretos con limitaciones, compromisos y casos donde rinde peor.`
+      : `- weakPoints: lista de strings con los puntos en contra / defectos.`,
+    expert
+      ? `- verdict: un veredicto claro de 2 frases maximo, mencionando para quien conviene.`
+      : `- verdict: un veredicto breve y claro sobre el producto.`,
     `Respondé SOLO el JSON, sin texto adicional.`,
   ].join('\n');
 }

@@ -93,6 +93,13 @@ describe('buildGeminiRequest + buildPrompt', () => {
     expect(prompt).toContain('Excelente batería');
     expect(prompt).toContain('Cable corto');
   });
+
+  it('asks for richer concrete bullets when summarizing expert analyses', () => {
+    const prompt = buildPrompt(REQUEST, true);
+    expect(prompt).toContain('3 a 5 strings concretos');
+    expect(prompt).toContain('limitaciones, compromisos');
+    expect(prompt).toContain('para quien conviene');
+  });
 });
 
 describe('isProxyRequest', () => {

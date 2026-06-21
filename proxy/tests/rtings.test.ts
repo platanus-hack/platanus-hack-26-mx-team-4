@@ -17,6 +17,7 @@ import {
   parseSearchResults,
   parseSearchApiResults,
   parseReviewPage,
+  extractVerdictDetails,
   decodeEntities,
   fetchAnalysis,
   RTINGS_MATCH_THRESHOLD,
@@ -139,6 +140,30 @@ describe('parseSearchApiResults', () => {
         url: 'https://www.rtings.com/headphones/reviews/bose/quietcomfort-ultra-earbuds-truly-wireless',
         title: 'Bose QuietComfort Ultra Earbuds Truly Wireless Headphones Review',
       },
+    ]);
+  });
+});
+
+
+describe('extractVerdictDetails', () => {
+  const RICH_DETAILS_HTML = `
+    &quot;summaries&quot;:[
+      {&quot;id&quot;:&quot;1&quot;,&quot;priority&quot;:1,&quot;order&quot;:1,&quot;blurb&quot;:&quot;Comprehensive companion app.&quot;,&quot;title&quot;:null},
+      {&quot;id&quot;:&quot;2&quot;,&quot;priority&quot;:1,&quot;order&quot;:2,&quot;blurb&quot;:&quot;Long battery life.&quot;,&quot;title&quot;:null},
+      {&quot;id&quot;:&quot;3&quot;,&quot;priority&quot;:-1,&quot;order&quot;:3,&quot;blurb&quot;:&quot;Noise isolation doesn&#39;t tackle low-pitched sounds.&quot;,&quot;title&quot;:null}
+    ],
+    &quot;ratings&quot;:[
+      {&quot;score&quot;:null,&quot;suitable&quot;:true,&quot;preferred&quot;:true,&quot;linked_description&quot;:&quot;They are lightweight and fold down, but their noise cancelling is weak for buses.&quot;,&quot;usage&quot;:{&quot;id&quot;:&quot;1&quot;,&quot;original_id&quot;:&quot;16&quot;,&quot;name&quot;:&quot;Travel&quot;,&quot;kind&quot;:&quot;usage&quot;}},
+      {&quot;score&quot;:null,&quot;suitable&quot;:true,&quot;preferred&quot;:false,&quot;linked_description&quot;:&quot;They have balanced sound but shallow earcups can affect the seal.&quot;,&quot;usage&quot;:{&quot;id&quot;:&quot;2&quot;,&quot;original_id&quot;:&quot;32776&quot;,&quot;name&quot;:&quot;Audio Reproduction Accuracy&quot;,&quot;kind&quot;:&quot;performance&quot;}}
+    ]`;
+
+  it('extracts public pros, cons and usage verdict paragraphs from RTINGS embedded props', () => {
+    const details = extractVerdictDetails(RICH_DETAILS_HTML);
+    expect(details.pros).toEqual(['Comprehensive companion app.', 'Long battery life.']);
+    expect(details.cons).toEqual(["Noise isolation doesn't tackle low-pitched sounds."]);
+    expect(details.usageAnalyses).toEqual([
+      'Travel: They are lightweight and fold down, but their noise cancelling is weak for buses.',
+      'Audio Reproduction Accuracy: They have balanced sound but shallow earcups can affect the seal.',
     ]);
   });
 });
