@@ -293,6 +293,15 @@ function metaDescription(html: string): string | null {
   return m ? decodeEntities(m[1]).trim() : null;
 }
 
+/** Pull a usable page title from og:title or <title>. */
+function metaTitle(html: string): string | null {
+  const m =
+    /<meta\b[^>]*property="og:title"[^>]*content="([^"]*)"/i.exec(html) ||
+    /<meta\b[^>]*content="([^"]*)"[^>]*property="og:title"/i.exec(html) ||
+    /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+  return m ? decodeEntities(stripTags(m[1])).replace(/\s+-\s+RTINGS\.com$/i, '').trim() : null;
+}
+
 /** Pull the canonical URL of the review page. */
 function canonicalUrl(html: string): string | null {
   const m = /<link\b[^>]*rel="canonical"[^>]*href="([^"]+)"/i.exec(html);
@@ -318,7 +327,16 @@ export function parseReviewPage(html: string, pageUrl?: string): NormalizedAnaly
     reviews: [],
   };
   if (!product || typeof product.name !== 'string' || product.name.trim().length === 0) {
-    return empty;
+    const title = metaTitle(html);
+    const description = metaDescription(html);
+    if (!title || !description) return empty;
+    return {
+      sourceId: RTINGS_SOURCE_ID,
+      sourceLabel: RTINGS_LABEL,
+      sourceUrl: url,
+      productMatched: true,
+      reviews: [{ rating: null, text: `${title}. ${description}`, kind: 'expert' }],
+    };
   }
 
   const brandName = typeof product.brand === 'object' ? product.brand?.name : product.brand;

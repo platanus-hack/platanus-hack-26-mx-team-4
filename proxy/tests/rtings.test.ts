@@ -176,6 +176,24 @@ describe('parseReviewPage — real fixture', () => {
     expect(out.productMatched).toBe(false);
     expect(out.reviews).toHaveLength(0);
   });
+
+  it('falls back to meta title + description when RTINGS omits Product JSON-LD reviewBody', () => {
+    const out = parseReviewPage(
+      `<html><head>
+        <link rel="canonical" href="https://www.rtings.com/headphones/reviews/sony/wh-1000xm5-wireless"/>
+        <meta property="og:title" content="Sony WH-1000XM5 Wireless Review" />
+        <meta name="description" content="The Sony WH-1000XM5 Wireless are premium over-ear headphones with strong noise isolation."/>
+      </head></html>`,
+    );
+    expect(out.productMatched).toBe(true);
+    expect(out.sourceUrl).toBe('https://www.rtings.com/headphones/reviews/sony/wh-1000xm5-wireless');
+    expect(out.reviews[0]).toMatchObject({
+      rating: null,
+      kind: 'expert',
+    });
+    expect(out.reviews[0].text).toContain('Sony WH-1000XM5 Wireless Review');
+    expect(out.reviews[0].text).toContain('strong noise isolation');
+  });
 });
 
 describe('fetchAnalysis — orchestration (mocked fetch)', () => {
