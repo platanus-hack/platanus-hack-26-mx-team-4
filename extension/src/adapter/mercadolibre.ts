@@ -70,6 +70,9 @@ export function parseCards(root: ParentNode): ParsedCard[] {
       reviewCount: parseReviewCount(card),
       price: parsePrice(card),
       sponsored: parseSponsored(card),
+      freeShipping: parseFreeShipping(card),
+      full: parseFull(card),
+      discount: parseDiscount(card),
       nodeRef: row,
     });
   });
@@ -140,18 +143,73 @@ function parsePrice(card: HTMLElement): number | null {
   // previous (e.g. a non-discounted card with a single price).
   const current =
     amounts.find((a) => !a.classList.contains('andes-money-amount--previous')) ?? amounts[0];
-  if (!current) return null;
+  return amountValue(current ?? null);
+}
 
-  const fraction = parseIntegerText(current.querySelector('.andes-money-amount__fraction'));
+/**
+ * Numeric value of a single `.andes-money-amount` element: integer fraction plus
+ * the optional 2-digit cents. Thousands separators are stripped. Returns null
+ * when the fraction is missing/unparseable. Shared by `parsePrice` (current
+ * amount) and `parseDiscount` (previous amount).
+ */
+function amountValue(amount: Element | null): number | null {
+  if (!amount) return null;
+  const fraction = parseIntegerText(amount.querySelector('.andes-money-amount__fraction'));
   if (fraction === null) return null;
-
-  let price = fraction;
-  const centsEl = current.querySelector('.andes-money-amount__cents');
+  let value = fraction;
+  const centsEl = amount.querySelector('.andes-money-amount__cents');
   if (centsEl) {
     const cents = parseIntegerText(centsEl);
-    if (cents !== null) price = fraction + cents / 100;
+    if (cents !== null) value = fraction + cents / 100;
   }
-  return Number.isFinite(price) ? price : null;
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Free-shipping flag. ML renders shipping inside `.poly-component__shipping*`
+ * (e.g. `poly-component__shipping-v2`) as a pill whose text reads "Envío gratis"
+ * / "Llega gratis hoy". We treat the listing as free-shipping iff that block's
+ * text contains "gratis" (accent-insensitive). Absent block -> false.
+ */
+function parseFreeShipping(card: HTMLElement): boolean {
+  const shipping = card.querySelector('[class*="poly-component__shipping"]');
+  if (!shipping) return false;
+  return /gratis/i.test(shipping.textContent ?? '');
+}
+
+/**
+ * Mercado Envíos Full flag (fast, ML-fulfilled). ML marks it with an icon whose
+ * accessible label is "Enviado por FULL" inside the shipping block. We scan that
+ * block (falling back to the whole card) for any `aria-label` containing the
+ * standalone word "full" (case-insensitive). Absent -> false.
+ */
+function parseFull(card: HTMLElement): boolean {
+  const shipping = card.querySelector('[class*="poly-component__shipping"]');
+  const scope: ParentNode = shipping ?? card;
+  return Array.from(scope.querySelectorAll<HTMLElement>('[aria-label]')).some((el) =>
+    /\bfull\b/i.test(el.getAttribute('aria-label') ?? ''),
+  );
+}
+
+/**
+ * Real discount fraction in 0..1 from a struck previous price:
+ *   (previous - current) / previous
+ * Returns 0 when there is no previous price, the numbers don't parse, or the
+ * "discount" is non-positive (current >= previous). This rewards a genuine
+ * markdown off the listing's OWN prior price — distinct from `priceNorm`, which
+ * compares against the page mean.
+ */
+function parseDiscount(card: HTMLElement): number {
+  const priceBox = card.querySelector('.poly-component__price');
+  if (!priceBox) return 0;
+  const amounts = Array.from(priceBox.querySelectorAll<HTMLElement>('.andes-money-amount'));
+  const previousEl = amounts.find((a) => a.classList.contains('andes-money-amount--previous'));
+  const currentEl = amounts.find((a) => !a.classList.contains('andes-money-amount--previous'));
+  const previous = amountValue(previousEl ?? null);
+  const current = amountValue(currentEl ?? null);
+  if (previous === null || current === null) return 0;
+  if (previous <= 0 || current >= previous) return 0;
+  return (previous - current) / previous;
 }
 
 /** Strip non-digits and parse a base-10 integer, or null when none present. */

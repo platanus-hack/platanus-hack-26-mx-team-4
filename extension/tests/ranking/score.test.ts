@@ -265,3 +265,62 @@ describe('rank', () => {
     expect(out[0].nodeRef).toBe(node);
   });
 });
+
+describe('convenience signals — freeShipping / full / discount (w5/w6/w7)', () => {
+  // Page stats are computed across the cards; to isolate the new terms we hold
+  // rating/price/sales equal between the compared cards so only the new signal
+  // differs. A single shared price keeps priceNorm identical (z-score 0).
+  const W5 = RANK_CONFIG.w5 ?? 0;
+  const W6 = RANK_CONFIG.w6 ?? 0;
+  const W7 = RANK_CONFIG.w7 ?? 0;
+
+  it('free shipping adds exactly w5 to the score, all else equal', () => {
+    const stats = computeCardPageStats([card({ id: 'x', price: 100 })]);
+    const base = computeQualityScore(card({ id: 'x', price: 100 }), stats, CFG);
+    const free = computeQualityScore(card({ id: 'x', price: 100, freeShipping: true }), stats, CFG);
+    expect(free - base).toBeCloseTo(W5, 10);
+  });
+
+  it('Full adds exactly w6 to the score, all else equal', () => {
+    const stats = computeCardPageStats([card({ id: 'x', price: 100 })]);
+    const base = computeQualityScore(card({ id: 'x', price: 100 }), stats, CFG);
+    const full = computeQualityScore(card({ id: 'x', price: 100, full: true }), stats, CFG);
+    expect(full - base).toBeCloseTo(W6, 10);
+  });
+
+  it('discount adds w7 * discountFraction (clamped to 0..1)', () => {
+    const stats = computeCardPageStats([card({ id: 'x', price: 100 })]);
+    const base = computeQualityScore(card({ id: 'x', price: 100 }), stats, CFG);
+    const half = computeQualityScore(card({ id: 'x', price: 100, discount: 0.5 }), stats, CFG);
+    expect(half - base).toBeCloseTo(W7 * 0.5, 10);
+    // Out-of-range discount is clamped (never explodes the score).
+    const clamped = computeQualityScore(card({ id: 'x', price: 100, discount: 9 }), stats, CFG);
+    expect(clamped - base).toBeCloseTo(W7 * 1, 10);
+  });
+
+  it('missing signals contribute 0 (backward compatible: undefined -> no boost)', () => {
+    const stats = computeCardPageStats([card({ id: 'x', price: 100 })]);
+    const plain = computeQualityScore(card({ id: 'x', price: 100 }), stats, CFG);
+    const explicitFalse = computeQualityScore(
+      card({ id: 'x', price: 100, freeShipping: false, full: false, discount: 0 }),
+      stats,
+      CFG,
+    );
+    expect(plain).toBeCloseTo(explicitFalse, 10);
+  });
+
+  it('breaks a tie in favor of the free-shipping + Full + discounted card', () => {
+    const plain = card({ id: 'plain', rating: 4, reviewCount: 10, price: 100 });
+    const better = card({
+      id: 'better',
+      rating: 4,
+      reviewCount: 10,
+      price: 100,
+      freeShipping: true,
+      full: true,
+      discount: 0.2,
+    });
+    const out = rank([plain, better], CFG);
+    expect(out[0].id).toBe('better');
+  });
+});

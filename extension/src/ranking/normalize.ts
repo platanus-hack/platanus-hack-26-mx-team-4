@@ -78,6 +78,27 @@ export function sponsoredPenalty(sponsored: boolean): number {
   return sponsored ? 1 : 0;
 }
 
+/** Binary free-shipping boost: free ? 1 : 0. Undefined -> 0 (no boost). */
+export function freeShippingBoost(free: boolean | undefined): number {
+  return free ? 1 : 0;
+}
+
+/** Binary Mercado Envíos Full boost: full ? 1 : 0. Undefined -> 0 (no boost). */
+export function fullBoost(full: boolean | undefined): number {
+  return full ? 1 : 0;
+}
+
+/**
+ * Clamp a real-discount fraction into 0..1. The adapter already computes
+ * (previous - current) / previous; this guards against NaN / out-of-range
+ * values (e.g. a corrupt "previous" price) so the term can never explode the
+ * score. Undefined / non-finite -> 0.
+ */
+export function discountNorm(discount: number | undefined): number {
+  if (discount == null || !Number.isFinite(discount)) return 0;
+  return Math.min(1, Math.max(0, discount));
+}
+
 /**
  * Bayesian-shrunk rating, normalized to 0..1.
  *

@@ -146,6 +146,33 @@ describe('mercadolibre adapter — fixture-grounded', () => {
       }
     });
 
+    it('parses freeShipping as a boolean and detects the "gratis" shipping pills', () => {
+      for (const c of cards) expect(typeof c.freeShipping).toBe('boolean');
+      // The fixture renders "Llega gratis ..." pills on many cards.
+      expect(cards.some((c) => c.freeShipping === true)).toBe(true);
+    });
+
+    it('parses full as a boolean and detects the "Enviado por FULL" badge', () => {
+      for (const c of cards) expect(typeof c.full).toBe('boolean');
+      // The fixture renders the Mercado Envíos Full badge on many cards.
+      expect(cards.some((c) => c.full === true)).toBe(true);
+    });
+
+    it('parses discount as a 0..1 fraction; the first card is ~0.31 off (649 -> 449.01)', () => {
+      for (const c of cards) {
+        expect(typeof c.discount).toBe('number');
+        expect(c.discount!).toBeGreaterThanOrEqual(0);
+        expect(c.discount!).toBeLessThanOrEqual(1);
+      }
+      expect(cards[0].discount!).toBeCloseTo((649 - 449.01) / 649, 4);
+    });
+
+    it('reports discount=0 for cards without a struck previous price', () => {
+      // A card whose price has no `--previous` amount must not fabricate a discount.
+      const noDiscount = cards.filter((c) => c.discount === 0);
+      expect(noDiscount.length).toBeGreaterThan(0);
+    });
+
     it('returns [] for an empty container', () => {
       const empty = fixtureDoc.createElement('ol');
       expect(parseCards(empty)).toEqual([]);

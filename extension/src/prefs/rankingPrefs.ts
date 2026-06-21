@@ -67,7 +67,10 @@ function presetKey(preset: unknown): string {
 export function presetToConfig(preset: string): RankConfig {
   const key = presetKey(preset);
   const cfg = PRESETS[key] ?? PRESETS[DEFAULT_PRESET_KEY];
-  return { ...cfg };
+  // Spread RANK_CONFIG first so signal weights NOT tuned per preset (w5/w6/w7 —
+  // free shipping / Full / discount) inherit their defaults; the preset literal
+  // then overrides the signals it actually varies (w1/w2/w4).
+  return { ...RANK_CONFIG, ...cfg };
 }
 
 /**
@@ -97,12 +100,18 @@ export function normalizePrefs(raw: unknown): RankConfig {
     return { ...RANK_CONFIG };
   }
   const r = raw as Record<string, unknown>;
+  // Spread RANK_CONFIG so any weight not present in stored prefs (e.g. w5/w6/w7
+  // from an older saved payload) is carried from defaults instead of dropped.
   return {
+    ...RANK_CONFIG,
     w1: normalizeField(r.w1, RANK_CONFIG.w1),
     w2: normalizeField(r.w2, RANK_CONFIG.w2),
     w3: normalizeField(r.w3, RANK_CONFIG.w3),
     w4: normalizeField(r.w4, RANK_CONFIG.w4),
     priorC: normalizeField(r.priorC, RANK_CONFIG.priorC),
+    w5: normalizeField(r.w5, RANK_CONFIG.w5 ?? 0),
+    w6: normalizeField(r.w6, RANK_CONFIG.w6 ?? 0),
+    w7: normalizeField(r.w7, RANK_CONFIG.w7 ?? 0),
   };
 }
 

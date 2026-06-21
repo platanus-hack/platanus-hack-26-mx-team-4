@@ -208,7 +208,10 @@ describe('reorderer — fixture-grounded', () => {
 describe('updateConfig — zero-network re-rank of current DOM', () => {
   // A config that emphasizes price strongly and drops the sponsored penalty,
   // producing an order distinct from the default RANK_CONFIG on the fixture.
-  const PRICE_HEAVY: RankConfig = { w1: 0.05, w2: 2.0, w3: 0.0, w4: 0.05, priorC: 5 };
+  // Spread RANK_CONFIG so the convenience-signal weights (w5/w6/w7) match what
+  // `updateConfig` injects via normalizePrefs (it merges defaults for any field
+  // a partial config omits).
+  const PRICE_HEAVY: RankConfig = { ...RANK_CONFIG, w1: 0.05, w2: 2.0, w3: 0.0, w4: 0.05 };
 
   beforeEach(() => freshFixture());
   afterEach(() => vi.useRealTimers());
@@ -322,7 +325,7 @@ describe('updateConfig — zero-network re-rank of current DOM', () => {
 // MercadoLibre-served order. Restore is just clearing the CSS `order` the
 // reorderer set (the DOM was never moved), so it is structurally exact.
 describe('cross-cutting: toggle OFF restores exact order after prefs-driven reorder (Phase 6.1)', () => {
-  const PRICE_HEAVY: RankConfig = { w1: 0.05, w2: 2.0, w3: 0.0, w4: 0.05, priorC: 5 };
+  const PRICE_HEAVY: RankConfig = { ...RANK_CONFIG, w1: 0.05, w2: 2.0, w3: 0.0, w4: 0.05 };
 
   beforeEach(() => freshFixture());
 

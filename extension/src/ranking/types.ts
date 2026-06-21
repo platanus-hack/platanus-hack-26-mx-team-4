@@ -17,6 +17,23 @@ export type CardSignals = {
   price: number | null;
   /** Whether the card is a sponsored / "Promocionado" listing. */
   sponsored: boolean;
+  /**
+   * Whether the listing advertises free shipping ("Envío gratis" / "Llega
+   * gratis ..."). Optional so plain test signals stay valid; the adapter always
+   * populates it (missing -> treated as false).
+   */
+  freeShipping?: boolean;
+  /**
+   * Whether the listing ships via Mercado Envíos Full (fast, ML-fulfilled).
+   * Optional (see `freeShipping`); the adapter always populates it.
+   */
+  full?: boolean;
+  /**
+   * Real discount fraction 0..1 derived from a struck previous price
+   * ((previous - current) / previous), or 0 when there is no valid discount.
+   * Optional (see `freeShipping`); the adapter always populates it.
+   */
+  discount?: number;
 };
 
 /**
@@ -44,10 +61,14 @@ export type ScoredCard = ParsedCard & {
  *   w3     — sponsored penalty
  *   w4     — log-sold volume weight
  *   priorC — Bayesian shrinkage prior (confidence strength for the page mean)
+ *   w5     — free-shipping boost (binary: "Envío gratis")
+ *   w6     — Mercado Envíos Full boost (binary: fast fulfillment)
+ *   w7     — real-discount boost (0..1 fraction off a struck previous price)
  *
  * With `priorC = 0` and `w4 = 0` the v2 formula reduces to the v1 one
  * (`w1*ratingNorm + w2*priceNorm - w3*sponsoredPenalty`), preserving prior
- * importer behavior.
+ * importer behavior. w5/w6/w7 are optional (default 0 when absent) so existing
+ * configs and tests stay valid; production defaults live in `src/config.ts`.
  */
 export type RankConfig = {
   w1: number;
@@ -55,6 +76,9 @@ export type RankConfig = {
   w3: number;
   w4: number;
   priorC: number;
+  w5?: number;
+  w6?: number;
+  w7?: number;
 };
 
 /**

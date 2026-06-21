@@ -1,6 +1,7 @@
 // Ranking score + ordering — PURE core, no DOM, no globals.
 //
-// quality_score = w1*shrunkRating + w2*priceNorm - w3*sponsoredPenalty + w4*logSalesNorm
+// quality_score = w1*shrunkRating + w2*priceNorm - w3*sponsoredPenalty
+//               + w4*logSalesNorm + w5*freeShipping + w6*full + w7*discount
 //
 // `rank` computes page-level statistics across all cards (price mean/stddev,
 // rating mean over present ratings, min/max sold counts), scores each, then
@@ -18,7 +19,16 @@
 // nodeRef), which flows through unchanged to the scored output.
 
 import type { CardSignals, RankConfig, PageStats } from './types';
-import { priceNorm, sponsoredPenalty, shrunkRating, logSalesNorm, computeCardPageStats } from './normalize';
+import {
+  priceNorm,
+  sponsoredPenalty,
+  shrunkRating,
+  logSalesNorm,
+  freeShippingBoost,
+  fullBoost,
+  discountNorm,
+  computeCardPageStats,
+} from './normalize';
 
 /** Compute a single card's quality score from its signals + page stats + config. */
 export function computeQualityScore(card: CardSignals, stats: PageStats, config: RankConfig): number {
@@ -27,7 +37,10 @@ export function computeQualityScore(card: CardSignals, stats: PageStats, config:
     config.w1 * shrunkRating(card.rating, sales, stats.ratingMean, config.priorC) +
     config.w2 * priceNorm(card.price, stats) -
     config.w3 * sponsoredPenalty(card.sponsored) +
-    config.w4 * logSalesNorm(sales, stats)
+    config.w4 * logSalesNorm(sales, stats) +
+    (config.w5 ?? 0) * freeShippingBoost(card.freeShipping) +
+    (config.w6 ?? 0) * fullBoost(card.full) +
+    (config.w7 ?? 0) * discountNorm(card.discount)
   );
 }
 

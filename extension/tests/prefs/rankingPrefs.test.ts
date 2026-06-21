@@ -22,7 +22,7 @@ const DEFAULTS = RANK_CONFIG;
 const PREFS_KEY = 'ml-rerank:prefs:v1';
 
 /** A complete, valid config distinct from every preset (used as stored input). */
-const FULL_VALID: RankConfig = { w1: 0.9, w2: 0.2, w3: 0.5, w4: 0.4, priorC: 10 };
+const FULL_VALID: RankConfig = { w1: 0.9, w2: 0.2, w3: 0.5, w4: 0.4, priorC: 10, w5: 0.15, w6: 0.15, w7: 0.1 };
 
 /** Every preset MUST resolve to a structurally complete, finite, non-negative
  *  RankConfig (no missing keys, no NaN/Infinity, no negatives). */
@@ -50,7 +50,7 @@ describe('presetToConfig — preset -> complete RankConfig', () => {
   it('Mejor valorados emphasizes the shrunk-rating weight (w1) over price/sales', () => {
     const cfg = presetToConfig('Mejor valorados');
     expectCompleteConfig(cfg);
-    expect(cfg).toEqual({ w1: 1.0, w2: 0.1, w3: 0.4, w4: 0.1, priorC: 5 });
+    expect(cfg).toEqual({ ...DEFAULTS, w1: 1.0, w2: 0.1, w4: 0.1 });
     // Rating-dominant: w1 strictly greater than every other signal weight.
     expect(cfg.w1).toBeGreaterThan(cfg.w2);
     expect(cfg.w1).toBeGreaterThan(cfg.w4);
@@ -59,7 +59,7 @@ describe('presetToConfig — preset -> complete RankConfig', () => {
   it('Más vendidos emphasizes the log-sold volume weight (w4)', () => {
     const cfg = presetToConfig('Más vendidos');
     expectCompleteConfig(cfg);
-    expect(cfg).toEqual({ w1: 0.3, w2: 0.2, w3: 0.4, w4: 1.0, priorC: 5 });
+    expect(cfg).toEqual({ ...DEFAULTS, w1: 0.3, w2: 0.2, w4: 1.0 });
     expect(cfg.w4).toBeGreaterThan(cfg.w1);
     expect(cfg.w4).toBeGreaterThan(cfg.w2);
   });
@@ -67,7 +67,7 @@ describe('presetToConfig — preset -> complete RankConfig', () => {
   it('Económicos emphasizes the price-quality weight (w2)', () => {
     const cfg = presetToConfig('Económicos');
     expectCompleteConfig(cfg);
-    expect(cfg).toEqual({ w1: 0.2, w2: 1.0, w3: 0.4, w4: 0.2, priorC: 5 });
+    expect(cfg).toEqual({ ...DEFAULTS, w1: 0.2, w2: 1.0, w4: 0.2 });
     expect(cfg.w2).toBeGreaterThan(cfg.w1);
     expect(cfg.w2).toBeGreaterThan(cfg.w4);
   });
@@ -149,11 +149,12 @@ describe('normalizePrefs — validate / clamp / merge defaults, never throw', ()
     expect(normalizePrefs({ w4: -0.5 })).toEqual({ ...DEFAULTS, w4: 0 });
     expect(normalizePrefs({ priorC: -3 })).toEqual({ ...DEFAULTS, priorC: 0 });
     const all = normalizePrefs({ w1: -1, w2: -2, w3: -3, w4: -4, priorC: -5 });
-    expect(all).toEqual({ w1: 0, w2: 0, w3: 0, w4: 0, priorC: 0 });
+    expect(all).toEqual({ ...DEFAULTS, w1: 0, w2: 0, w3: 0, w4: 0, priorC: 0 });
   });
 
   it('keeps valid fields and defaults invalid ones in a mixed input', () => {
     expect(normalizePrefs({ w1: 0.7, w2: 'x' as unknown as number, w3: -1, w4: 0.5 })).toEqual({
+      ...DEFAULTS,
       w1: 0.7,
       w2: DEFAULTS.w2,
       w3: 0,
@@ -194,7 +195,7 @@ describe('manual slider override -> custom config (Phase 2.2)', () => {
   });
 
   it('a full manual override produces a config equal to the raw valid input', () => {
-    const manual: RankConfig = { w1: 0.8, w2: 0.7, w3: 0.2, w4: 0.6, priorC: 8 };
+    const manual: RankConfig = { w1: 0.8, w2: 0.7, w3: 0.2, w4: 0.6, priorC: 8, w5: 0.15, w6: 0.15, w7: 0.1 };
     expect(normalizePrefs(manual)).toEqual(manual);
     expect(normalizePrefs(manual)).not.toBe(manual);
   });
@@ -228,14 +229,14 @@ describe('loadPrefs / savePrefs — localStorage persistence', () => {
   });
 
   it('savePrefs writes JSON to the versioned key, loadPrefs reads it back', () => {
-    const cfg: RankConfig = { w1: 0.9, w2: 0.2, w3: 0.5, w4: 0.4, priorC: 10 };
+    const cfg: RankConfig = { w1: 0.9, w2: 0.2, w3: 0.5, w4: 0.4, priorC: 10, w5: 0.15, w6: 0.15, w7: 0.1 };
     savePrefs(cfg);
     expect(localStorage.getItem(PREFS_KEY)).toBe(JSON.stringify(cfg));
     expect(loadPrefs()).toEqual(cfg);
   });
 
   it('loadPrefs uses the stored config for the first rank (valid stored prefs)', () => {
-    const stored: RankConfig = { w1: 0.7, w2: 0.6, w3: 0.3, w4: 0.5, priorC: 7 };
+    const stored: RankConfig = { w1: 0.7, w2: 0.6, w3: 0.3, w4: 0.5, priorC: 7, w5: 0.15, w6: 0.15, w7: 0.1 };
     localStorage.setItem(PREFS_KEY, JSON.stringify(stored));
     expect(loadPrefs()).toEqual(stored);
   });
