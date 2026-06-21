@@ -9,12 +9,12 @@
 // arrive in the request body, so the proxy summarizes them directly without an
 // adapter lookup.
 
-import type { ProductQuery, NormalizedAnalysis } from './rtings';
+import type { ProductQuery, NormalizedAnalysis } from './rtings.ts';
 import {
   fetchAnalysis as fetchRtings,
   RTINGS_SOURCE_ID,
   RTINGS_LABEL,
-} from './rtings';
+} from './rtings.ts';
 
 /** A server-side source adapter: look a product up and normalize the result. */
 export interface ServerSourceAdapter {
