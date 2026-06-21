@@ -20,11 +20,34 @@
 // inject via innerHTML is authored by us (src/ui/icons.ts) and contains no
 // dynamic data.
 
+<<<<<<< HEAD
 import type { ProxyResponse, SummaryError } from './types';
 import { typewriter, createCaret } from '../ui/typewriter';
 import { sparkleIcon, chevronIcon } from '../ui/icons';
 
 export type SummaryState = 'loading' | 'empty' | 'error' | 'result';
+=======
+import type { ProxyResponse, SummaryError, SourceId } from './types';
+
+/** State stamped on the card root so CSS + tests can read the current state. */
+export type SummaryState = 'loading' | 'empty' | 'error' | 'result' | 'no-source-data';
+
+/** A selectable source descriptor for the header selector. */
+export interface SourceOption {
+  id: SourceId;
+  label: string;
+}
+
+/** Options to wire the source selector into the card header. */
+export interface SummaryViewOptions {
+  /** Sources to offer in the selector (omit/empty -> no selector rendered). */
+  sources?: readonly SourceOption[];
+  /** Initially-active source id. */
+  currentSource?: SourceId;
+  /** Called when the user picks a DIFFERENT source. */
+  onSourceChange?: (source: SourceId) => void;
+}
+>>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
 
 export interface SummaryView {
   readonly el: HTMLElement;
@@ -32,13 +55,41 @@ export interface SummaryView {
   showEmpty(opts?: { hasMoreReviewsHint?: boolean }): void;
   showError(error: SummaryError, onRetry?: () => void): void;
   showResult(summary: ProxyResponse): void;
+<<<<<<< HEAD
   destroy(): void;
 }
 
+=======
+  /** External source has no analysis for this product (fallback state). */
+  showNoSourceData(opts: { label: string; onSwitchToInternal?: () => void }): void;
+  /** Reflect the active source in the selector (does NOT fire onSourceChange). */
+  setActiveSource(source: SourceId): void;
+  /** Remove the card from the DOM. */
+  destroy(): void;
+}
+
+/** Above this many sources the selector renders as a dropdown instead of pills. */
+const SEGMENTED_MAX = 3;
+
+/** Attribute stamped on the card root for state + observer loop-avoidance. */
+>>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
 const SUMMARY_ATTR = 'data-ml-summary';
 const COLLAPSED_ATTR = 'data-ml-collapsed';
 
+<<<<<<< HEAD
 export function createSummaryView(host: HTMLElement): SummaryView {
+=======
+/**
+ * Create a summary card and append it to `host`. The card root + its header
+ * (title + minimize button) are created once; only the BODY is replaced across
+ * state transitions, so the minimize control persists and the pipeline observer
+ * can ignore our own writes.
+ */
+export function createSummaryView(host: HTMLElement, options: SummaryViewOptions = {}): SummaryView {
+  const sources = options.sources ?? [];
+  let activeSource: SourceId = options.currentSource ?? (sources[0]?.id ?? 'ml-internal');
+
+>>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
   const card = document.createElement('aside');
   card.className = 'ml-summary-card';
   card.setAttribute(SUMMARY_ATTR, 'loading');
@@ -74,14 +125,24 @@ export function createSummaryView(host: HTMLElement): SummaryView {
   minimize.innerHTML = chevronIcon;
   minimize.addEventListener('click', toggleCollapsed);
 
+<<<<<<< HEAD
   header.append(titleWrap, minimize);
 
+=======
+  // Optional source selector (segmented pills, or a dropdown beyond SEGMENTED_MAX).
+  // Sits on its own row under the title so it persists across state changes.
+  const selector = sources.length > 1 ? buildSelector() : null;
+
+  // Body: cleared + rebuilt on every state transition.
+>>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
   const body = document.createElement('div');
   body.className = 'ml-summary-card__body';
 
-  card.append(header, body);
+  if (selector) card.append(header, selector.el, body);
+  else card.append(header, body);
   host.appendChild(card);
 
+<<<<<<< HEAD
   // One AbortController per active render — cancel before next state transition
   // so in-flight typewriter animations stop cleanly (no leaks, no double-writes).
   let typingAbort: AbortController | null = null;
@@ -97,6 +158,65 @@ export function createSummaryView(host: HTMLElement): SummaryView {
     cancelTyping();
     typingAbort = new AbortController();
     return typingAbort.signal;
+=======
+  /** Build the source selector (pills or dropdown) wired to onSourceChange. */
+  function buildSelector(): { el: HTMLElement; setActive(id: SourceId): void } {
+    const wrap = document.createElement('div');
+    wrap.className = 'ml-summary-card__sources';
+    wrap.setAttribute('role', 'group');
+    wrap.setAttribute('aria-label', 'Fuente de análisis');
+
+    const emit = (id: SourceId): void => {
+      if (id === activeSource) return; // no-op when already active
+      options.onSourceChange?.(id);
+    };
+
+    if (sources.length <= SEGMENTED_MAX) {
+      const pills = new Map<SourceId, HTMLButtonElement>();
+      for (const s of sources) {
+        const pill = document.createElement('button');
+        pill.type = 'button';
+        pill.className = 'ml-summary-card__source-pill';
+        pill.textContent = s.label;
+        pill.dataset.sourceId = String(s.id);
+        pill.setAttribute('aria-pressed', String(s.id === activeSource));
+        pill.addEventListener('click', () => emit(s.id));
+        pills.set(s.id, pill);
+        wrap.appendChild(pill);
+      }
+      return {
+        el: wrap,
+        setActive(id) {
+          for (const [sid, pill] of pills) pill.setAttribute('aria-pressed', String(sid === id));
+        },
+      };
+    }
+
+    // Dropdown variant (scales to many sources).
+    const select = document.createElement('select');
+    select.className = 'ml-summary-card__source-select';
+    select.setAttribute('aria-label', 'Fuente de análisis');
+    for (const s of sources) {
+      const opt = document.createElement('option');
+      opt.value = String(s.id);
+      opt.textContent = s.label;
+      if (s.id === activeSource) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener('change', () => emit(select.value as SourceId));
+    wrap.appendChild(select);
+    return {
+      el: wrap,
+      setActive(id) {
+        select.value = String(id);
+      },
+    };
+  }
+
+  function setActiveSource(id: SourceId): void {
+    activeSource = id;
+    selector?.setActive(id);
+>>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
   }
 
   function toggleCollapsed(): void {
@@ -201,6 +321,7 @@ export function createSummaryView(host: HTMLElement): SummaryView {
     const verdict = document.createElement('p');
     verdictBox.append(verdictLabel, verdict);
     body.appendChild(verdictBox);
+<<<<<<< HEAD
     queue.push({ el: verdict, text: summary.verdict });
 
     function runNext(i: number): void {
@@ -214,6 +335,49 @@ export function createSummaryView(host: HTMLElement): SummaryView {
       });
     }
     runNext(0);
+=======
+
+    appendAttribution(summary.sourceMeta);
+  }
+
+  /** Append a "Basado en el análisis de <label> ↗" footer for external sources. */
+  function appendAttribution(meta: ProxyResponse['sourceMeta']): void {
+    if (!meta || !meta.label) return;
+    const footer = document.createElement('div');
+    footer.className = 'ml-summary-card__attribution';
+    // Only render a link for a safe https URL; otherwise show plain text.
+    const safeUrl = meta.url && /^https:\/\//i.test(meta.url) ? meta.url : null;
+    if (safeUrl) {
+      const prefix = document.createElement('span');
+      prefix.textContent = 'Basado en el análisis de ';
+      const link = document.createElement('a');
+      link.href = safeUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = `${meta.label} ↗`;
+      footer.append(prefix, link);
+    } else {
+      footer.textContent = `Basado en el análisis de ${meta.label}.`;
+    }
+    body.appendChild(footer);
+  }
+
+  function showNoSourceData(opts: { label: string; onSwitchToInternal?: () => void }): void {
+    setState('no-source-data');
+    clear();
+    const msg = document.createElement('p');
+    msg.className = 'ml-summary-card__empty';
+    msg.textContent = `${opts.label} no tiene un análisis para este producto.`;
+    body.appendChild(msg);
+    if (opts.onSwitchToInternal) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ml-summary-card__switch';
+      btn.textContent = 'Ver opiniones de Mercado Libre';
+      btn.addEventListener('click', opts.onSwitchToInternal);
+      body.appendChild(btn);
+    }
+>>>>>>> f2b775ec42721352c99ef6e60eae5a9fbd5372a0
   }
 
   function appendSection(
@@ -258,6 +422,8 @@ export function createSummaryView(host: HTMLElement): SummaryView {
     showEmpty,
     showError,
     showResult,
+    showNoSourceData,
+    setActiveSource,
     destroy,
   };
 }

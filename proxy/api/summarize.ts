@@ -17,11 +17,25 @@
 // sides validate defensively.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { ProductQuery, NormalizedReview, NormalizedAnalysis } from './sources/rtings.ts';
+import { getServerAdapter } from './sources/registry.ts';
 
 /** Mirror of extension ReviewText/ProxyRequest/ProxyResponse (see header). */
+type SourceId = 'ml-internal' | 'rtings' | (string & {});
 type ReviewText = { rating: number | null; text: string; date?: string };
-type ProxyRequest = { productId: string; productTitle: string; locale?: string; reviews: ReviewText[] };
-type ProxyResponse = { strongPoints: string[]; weakPoints: string[]; verdict: string };
+type ProxyRequest = {
+  source?: SourceId;
+  productId: string;
+  productTitle: string;
+  locale?: string;
+  reviews?: ReviewText[];
+  productQuery?: ProductQuery;
+};
+type SourceMeta = { sourceId: SourceId; label: string; url?: string; matched: boolean };
+type ProxyResponse = { strongPoints: string[]; weakPoints: string[]; verdict: string; sourceMeta?: SourceMeta };
+
+/** Default source when a request omits it (back-compat with ml-internal callers). */
+const DEFAULT_SOURCE: SourceId = 'ml-internal';
 
 /** Gemini 2.5 Flash REST endpoint (v1beta generateContent). */
 const GEMINI_MODEL = 'gemini-2.5-flash';
@@ -64,12 +78,12 @@ type HttpResult = { status: number; body: unknown };
 // ---------------------------------------------------------------------------
 
 /** Build the Gemini REST request URL + headers + JSON body for a ProxyRequest. */
-export function buildGeminiRequest(request: ProxyRequest, apiKey: string): {
+export function buildGeminiRequest(request: ProxyRequest, apiKey: string, expert = false): {
   url: string;
   headers: Record<string, string>;
   body: string;
 } {
-  const prompt = buildPrompt(request);
+  const prompt = buildPrompt(request, expert);
   const body = {
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: {
@@ -84,20 +98,30 @@ export function buildGeminiRequest(request: ProxyRequest, apiKey: string): {
   };
 }
 
-/** Compose the Spanish summarization prompt from product context + reviews. */
-export function buildPrompt(request: ProxyRequest): string {
-  const reviewLines = request.reviews.map((r, i) => {
+/**
+ * Compose the Spanish summarization prompt from product context + reviews. When
+ * `expert` is true the reviews are editorial/expert analyses (e.g. RTINGS lab
+ * reviews) rather than user opinions, so the framing is adapted accordingly; the
+ * required JSON output shape is identical for both.
+ */
+export function buildPrompt(request: ProxyRequest, expert = false): string {
+  const reviews = request.reviews ?? [];
+  const reviewLines = reviews.map((r, i) => {
     const rating = r.rating != null ? ` (estrellas: ${r.rating})` : '';
     const date = r.date ? ` [${r.date}]` : '';
     return `${i + 1}. ${r.text}${rating}${date}`;
   });
+  const intro = expert
+    ? `Sos un asistente que resume análisis técnicos de expertos (por ejemplo de RTINGS) sobre productos.`
+    : `Sos un asistente que resume opiniones de productos de MercadoLibre.`;
+  const sourceLabel = expert ? `Análisis de expertos:` : `Opiniones:`;
   return [
-    `Sos un asistente que resume opiniones de productos de MercadoLibre.`,
+    intro,
     `Producto: ${request.productTitle}.`,
-    `Opiniones:`,
+    sourceLabel,
     reviewLines.join('\n'),
     ``,
-    `Resumí las opiniones en JSON con tres campos:`,
+    `Resumí ${expert ? 'el análisis' : 'las opiniones'} en JSON con tres campos:`,
     `- strongPoints: lista de strings con los puntos a favor.`,
     `- weakPoints: lista de strings con los puntos en contra / defectos.`,
     `- verdict: un veredicto breve y claro sobre el producto.`,
@@ -121,6 +145,15 @@ export function isProxyRequest(value: unknown): value is ProxyRequest {
   const r = value as Record<string, unknown>;
   if (typeof r.productId !== 'string' || !r.productId) return false;
   if (typeof r.productTitle !== 'string') return false;
+
+  // `source` is optional and defaults to ml-internal (back-compat). An external
+  // source carries a productQuery (the proxy fetches the source) instead of
+  // inline reviews; ml-internal carries the extracted reviews.
+  const source = (typeof r.source === 'string' && r.source) || DEFAULT_SOURCE;
+  if (source !== DEFAULT_SOURCE) {
+    return isValidProductQuery(r.productQuery);
+  }
+
   if (!Array.isArray(r.reviews)) return false;
   if (r.reviews.length === 0) return false; // require at least one review
   if (r.reviews.length > MAX_REVIEWS) return false; // defensive count cap
@@ -134,6 +167,14 @@ export function isProxyRequest(value: unknown): value is ProxyRequest {
   });
 }
 
+/** An external request needs a productQuery with at least a brand, model, or title. */
+function isValidProductQuery(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const q = value as Record<string, unknown>;
+  const hasField = (k: string) => typeof q[k] === 'string' && (q[k] as string).trim().length > 0;
+  return hasField('brand') || hasField('model') || hasField('title');
+}
+
 /**
  * Cap each review's text to MAX_REVIEW_CHARS (defensive, post-validation). A
  * single over-long review is TRUNCATED rather than failing the whole summary
@@ -141,10 +182,10 @@ export function isProxyRequest(value: unknown): value is ProxyRequest {
  * a shallow-copied request with truncated review texts so the original is not
  * mutated.
  */
-export function truncateReviews(request: ProxyRequest): ProxyRequest {
+export function truncateReviews(request: ProxyRequest): ProxyRequest & { reviews: ReviewText[] } {
   return {
     ...request,
-    reviews: request.reviews.map((r) =>
+    reviews: (request.reviews ?? []).map((r) =>
       r.text.length > MAX_REVIEW_CHARS ? { ...r, text: r.text.slice(0, MAX_REVIEW_CHARS) } : r,
     ),
   };
@@ -218,8 +259,9 @@ export async function summarizeWithGemini(
   request: ProxyRequest,
   apiKey: string,
   fetchImpl: typeof fetch = fetch,
+  expert = false,
 ): Promise<GeminiOutcome> {
-  const { url, headers, body } = buildGeminiRequest(request, apiKey);
+  const { url, headers, body } = buildGeminiRequest(request, apiKey, expert);
   let res: Response;
   try {
     res = await fetchImpl(url, { method: 'POST', headers, body });
@@ -242,6 +284,11 @@ export async function summarizeWithGemini(
  * Core request handling (pure, no req/res I/O): validate the parsed request,
  * check the API key, call Gemini, and map to an {status, body} HTTP result.
  */
+/** Map an adapter's NormalizedReview to the proxy ReviewText prompt shape. */
+function toReviewText(r: NormalizedReview): ReviewText {
+  return { rating: r.rating, text: r.text, ...(r.date ? { date: r.date } : {}) };
+}
+
 export async function handleRequest(
   request: unknown,
   apiKey: string | undefined,
@@ -253,10 +300,44 @@ export async function handleRequest(
   if (!apiKey) {
     return { status: 500, body: { error: 'missing_api_key' } };
   }
+
+  const source: SourceId = request.source ?? DEFAULT_SOURCE;
+
+  // External source (e.g. RTINGS): fetch + normalize SERVER-SIDE, then summarize
+  // the editorial analysis. A no-match returns a 200 marker body the extension
+  // renders as the "no data" fallback (NOT an error — the request was valid).
+  let expert = false;
+  let toSummarize: ProxyRequest = request;
+  let sourceMeta: SourceMeta | undefined;
+  if (source !== DEFAULT_SOURCE) {
+    const adapter = getServerAdapter(source);
+    if (!adapter) {
+      return { status: 400, body: { error: 'unsupported_source' } };
+    }
+    let analysis: NormalizedAnalysis;
+    try {
+      analysis = await adapter.fetchAnalysis(request.productQuery ?? {}, fetchImpl);
+    } catch {
+      // Adapter is defensive and should not throw, but never let it 500 the proxy.
+      analysis = { sourceId: source as 'rtings', sourceLabel: adapter.label, productMatched: false, reviews: [] };
+    }
+    sourceMeta = {
+      sourceId: source,
+      label: adapter.label,
+      ...(analysis.sourceUrl ? { url: analysis.sourceUrl } : {}),
+      matched: analysis.productMatched,
+    };
+    if (!analysis.productMatched || analysis.reviews.length === 0) {
+      return { status: 200, body: { error: 'no_source_data', sourceMeta } };
+    }
+    expert = analysis.reviews.some((r) => r.kind === 'expert');
+    toSummarize = { ...request, reviews: analysis.reviews.map(toReviewText) };
+  }
+
   // Truncate over-long review texts post-validation (a single long review
   // never fails the whole summary; the count cap + empty-text already rejected).
-  const normalized = truncateReviews(request);
-  const result = await summarizeWithGemini(normalized, apiKey, fetchImpl);
+  const normalized = truncateReviews(toSummarize);
+  const result = await summarizeWithGemini(normalized, apiKey, fetchImpl, expert);
   if (!result.ok) {
     // A Gemini 429 (rate limit / quota) is propagated AS 429 so the extension
     // can render its polished "límite de uso" state instead of a raw 5xx. Every
@@ -274,7 +355,10 @@ export async function handleRequest(
       },
     };
   }
-  return { status: 200, body: result.data };
+  // Attach sourceMeta only for external sources so the ml-internal contract is
+  // byte-for-byte unchanged (existing clients + tests see exactly the summary).
+  const body: ProxyResponse = sourceMeta ? { ...result.data, sourceMeta } : result.data;
+  return { status: 200, body };
 }
 
 /**

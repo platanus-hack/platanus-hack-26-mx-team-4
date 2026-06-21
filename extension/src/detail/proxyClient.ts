@@ -56,9 +56,25 @@ export async function fetchSummary(
     return error('malformed', 'La respuesta del proxy no contiene JSON.');
   }
 
+  // External source with no analysis for this product: the proxy returns a 200
+  // marker body (a valid request, just no data). Surface it as the dedicated
+  // 'no-source-data' state so the UI shows the fallback instead of an error.
+  if (isNoSourceData(json)) {
+    return error('no-source-data', 'No hay análisis externo disponible para este producto.');
+  }
+
   const parsed = parseProxyResponse(json);
   if (!parsed.ok) return parsed;
   return { ok: true, data: parsed.data };
+}
+
+/** True when the proxy body is the external "no analysis for this product" marker. */
+function isNoSourceData(json: unknown): boolean {
+  return (
+    typeof json === 'object' &&
+    json !== null &&
+    (json as Record<string, unknown>).error === 'no_source_data'
+  );
 }
 
 function error(kind: SummaryError['kind'], message: string): { ok: false; error: SummaryError } {
