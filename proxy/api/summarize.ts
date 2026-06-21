@@ -18,7 +18,6 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ProductQuery, NormalizedReview, NormalizedAnalysis } from './sources/rtings.js';
-import { getServerAdapter } from './sources/registry.js';
 
 /** Mirror of extension ReviewText/ProxyRequest/ProxyResponse (see header). */
 type SourceId = 'ml-internal' | 'rtings' | (string & {});
@@ -33,6 +32,11 @@ type ProxyRequest = {
 };
 type SourceMeta = { sourceId: SourceId; label: string; url?: string; matched: boolean };
 type ProxyResponse = { strongPoints: string[]; weakPoints: string[]; verdict: string; sourceMeta?: SourceMeta };
+type ServerSourceAdapter = {
+  id: string;
+  label: string;
+  fetchAnalysis(query: ProductQuery, fetchImpl?: typeof fetch): Promise<NormalizedAnalysis>;
+};
 
 /** Default source when a request omits it (back-compat with ml-internal callers). */
 const DEFAULT_SOURCE: SourceId = 'ml-internal';
@@ -289,6 +293,22 @@ function toReviewText(r: NormalizedReview): ReviewText {
   return { rating: r.rating, text: r.text, ...(r.date ? { date: r.date } : {}) };
 }
 
+/**
+ * Load external-source adapters lazily.
+ *
+ * Keep this out of the module top-level: a Vercel/runtime resolution issue in
+ * an optional adapter must not crash the whole summarize function, especially
+ * the default Mercado Libre path and CORS preflight.
+ */
+async function getExternalAdapter(source: SourceId): Promise<ServerSourceAdapter | undefined> {
+  try {
+    const registry = await import('./sources/registry.js');
+    return registry.getServerAdapter(source);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function handleRequest(
   request: unknown,
   apiKey: string | undefined,
@@ -310,7 +330,7 @@ export async function handleRequest(
   let toSummarize: ProxyRequest = request;
   let sourceMeta: SourceMeta | undefined;
   if (source !== DEFAULT_SOURCE) {
-    const adapter = getServerAdapter(source);
+    const adapter = await getExternalAdapter(source);
     if (!adapter) {
       return { status: 400, body: { error: 'unsupported_source' } };
     }
