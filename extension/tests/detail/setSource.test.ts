@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { runDetailSummary } from '../../src/detail';
+import { writeCache } from '../../src/detail/cache';
 import type { ProxyResponse, ReviewText } from '../../src/detail/types';
 
 const PRODUCT_URL = 'https://articulo.mercadolibre.com.mx/MLM222222-audifonos';
@@ -43,9 +44,13 @@ function card(): HTMLElement {
 function cardState(): string {
   return card().getAttribute('data-ml-summary')!;
 }
+function verdictText(): string {
+  return card().querySelector('.ml-summary-card__verdict p')?.textContent ?? '';
+}
 
 beforeEach(() => {
   document.body.innerHTML = '';
+  vi.stubGlobal('matchMedia', () => ({ matches: true }));
   try {
     localStorage.clear();
   } catch {
@@ -54,6 +59,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   document.body.innerHTML = '';
+  vi.unstubAllGlobals();
 });
 
 describe('runDetailSummary — live source switching', () => {
@@ -63,16 +69,26 @@ describe('runDetailSummary — live source switching', () => {
     const controller = runDetailSummary({ doc: document, url: PRODUCT_URL, fetchImpl });
 
     await vi.waitFor(() => expect(cardState()).toBe('result'));
-    expect(card().querySelector('.ml-summary-card__verdict p')?.textContent).toBe('ML verdict.');
+    await vi.waitFor(() => expect(verdictText()).toBe('ML verdict.'));
 
     controller.setSource('rtings');
-    await vi.waitFor(() =>
-      expect(card().querySelector('.ml-summary-card__verdict p')?.textContent).toBe('RTINGS verdict.'),
-    );
+    await vi.waitFor(() => expect(verdictText()).toBe('RTINGS verdict.'));
     expect(controller.currentSource).toBe('rtings');
     // Attribution footer links back to the original analysis.
     const link = card().querySelector('.ml-summary-card__attribution a') as HTMLAnchorElement | null;
     expect(link?.href).toContain('rtings.com');
+  });
+
+  it('ignores stale RTINGS cache entries from the previous external fingerprint', async () => {
+    mountPdp();
+    writeCache('MLM222222', 'ext', { strongPoints: ['Old'], weakPoints: [], verdict: 'Old RTINGS.' }, 'rtings');
+    const fetchImpl = bySource(RTINGS_SUMMARY);
+    const controller = runDetailSummary({ doc: document, url: PRODUCT_URL, fetchImpl });
+    await vi.waitFor(() => expect(cardState()).toBe('result'));
+
+    controller.setSource('rtings');
+    await vi.waitFor(() => expect(verdictText()).toBe('RTINGS verdict.'));
+    expect(verdictText()).not.toBe('Old RTINGS.');
   });
 
   it('renders the no-source-data fallback when RTINGS has no analysis', async () => {
@@ -93,7 +109,7 @@ describe('runDetailSummary — live source switching', () => {
     btn.click();
     await vi.waitFor(() => {
       expect(controller.currentSource).toBe('ml-internal');
-      expect(card().querySelector('.ml-summary-card__verdict p')?.textContent).toBe('ML verdict.');
+      expect(verdictText()).toBe('ML verdict.');
     });
   });
 
@@ -106,15 +122,11 @@ describe('runDetailSummary — live source switching', () => {
 
     controller.setSource('rtings');
     await vi.waitFor(() => expect(controller.currentSource).toBe('rtings'));
-    await vi.waitFor(() =>
-      expect(card().querySelector('.ml-summary-card__verdict p')?.textContent).toBe('RTINGS verdict.'),
-    );
+    await vi.waitFor(() => expect(verdictText()).toBe('RTINGS verdict.'));
 
     controller.setSource('ml-internal');
     // ml-internal summary was cached on the first render -> a cache hit, no fetch.
-    await vi.waitFor(() =>
-      expect(card().querySelector('.ml-summary-card__verdict p')?.textContent).toBe('ML verdict.'),
-    );
+    await vi.waitFor(() => expect(verdictText()).toBe('ML verdict.'));
     const totalCalls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
     // Exactly one extra fetch (the RTINGS one); the ML re-render hit the cache.
     expect(totalCalls).toBe(callsAfterMl + 1);

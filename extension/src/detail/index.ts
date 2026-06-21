@@ -24,10 +24,11 @@ import type { ProductReviewData, ProxyRequest, SourceId } from './types';
 /**
  * Cache fingerprint for an EXTERNAL source. The extension has no review set to
  * fingerprint (the proxy fetches the source), so external summaries are cached
- * per source + product with a constant fingerprint; the 7-day TTL handles
- * staleness. (ml-internal keeps fingerprinting its extracted reviews.)
+ * per source + product with a constant fingerprint. Bump this value when the
+ * external summarization contract changes so stale RTINGS summaries are not
+ * reused for 7 days. (ml-internal keeps fingerprinting its extracted reviews.)
  */
-const EXTERNAL_FINGERPRINT = 'ext';
+const EXTERNAL_FINGERPRINT = 'ext:v2';
 
 /** MutationObserver debounce window (ms) — matches Pilar 1. */
 const DEBOUNCE_MS = 250;
